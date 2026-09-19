@@ -2,7 +2,7 @@
 // the same reason that one gives for its own placement: it is where a test
 // can import both internal/dbname and internal/server and check that they
 // actually agree, rather than trusting "they call the same function" as an
-// argument on its own. Task 0053's mục 2 says a shared function only one
+// argument on its own. Task 0053's section 2 says a shared function only one
 // caller actually reaches is not a shared rule — this is what proves
 // internal/server's caller is one of the ones actually reaching it.
 package server_test
@@ -25,7 +25,7 @@ import (
 //
 // The list mixes three kinds of case on purpose: two the path-separator
 // clause alone would refuse (a/b, and NUL), several that clause does NOT
-// refuse but the character table does (a;b, m|n, "a b" — task 0053 mục 3's
+// refuse but the character table does (a;b, m|n, "a b" — task 0053 section 3's
 // "not every half of the rule is a separator" finding), and two controls at
 // the 64-character boundary that must be accepted by both doors. A table
 // that only exercised the separator clause would not catch server.database

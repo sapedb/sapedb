@@ -145,7 +145,7 @@ func TestTheTwoBoundsNeverDependOnDirection(t *testing.T) {
 
 // TestALimitCanHandBackDifferentRowsFromEitherEndOfAPinnedStretch is the
 // counter-example that ruled out patching the swap a fourth time (round 4,
-// mục 1). TestAPinnedConstantSurvivesBeingReadFromEitherEnd (direction_test.go)
+// section 1). TestAPinnedConstantSurvivesBeingReadFromEitherEnd (direction_test.go)
 // established that a constant pinned identically at both ends is read as one
 // set of rows both ways — with a Limit large enough to see the whole set.
 // Shrink the Limit and that stops being true, and no shape-based rule in

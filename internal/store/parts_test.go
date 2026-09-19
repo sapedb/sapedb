@@ -332,7 +332,7 @@ func TestAPartitionIsEncryptedIfTheDatabaseIs(t *testing.T) {
 func TestWhatCanBeCalledAPartition(t *testing.T) {
 	_, _, store := partitioned(t, 206)
 
-	for _, name := range []string{"", ".", "..", "../escape", "a/b", "a\x00b", "with space", "café"} {
+	for _, name := range []string{"", ".", "..", "../escape", "a/b", "a\x00b", "with space", "naïve"} {
 		if _, err := store.Part(name); !errors.Is(err, ErrPartName) {
 			t.Errorf("%q was accepted as a partition name: %v", name, err)
 		}

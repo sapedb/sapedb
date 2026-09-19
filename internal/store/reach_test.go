@@ -265,7 +265,7 @@ func reversedList(list []string) []string {
 // rather than read as empty. This function does not try to predict, for an
 // arbitrary shape, exactly which pairs that is: doing that from outside would
 // mean recomputing boundAt's Exclusive/successor arithmetic a second time in
-// the test, which is the very duplication task 0045 mục 1 exists to close —
+// the test, which is the very duplication task 0045 section 1 exists to close —
 // a second copy here would drift from the real rule exactly the way a third
 // copy in production would have. What this function asks instead is the
 // symmetry every other test in this round also leans on: whichever outcome a
@@ -554,7 +554,7 @@ func TestEveryShapeOfDeclarationDeclaresAndReadsOneStretchBothWays(t *testing.T)
 //
 // fill() writes exactly six rows and several other tests count on that, which
 // is why the floor row is added here rather than in fill() itself. It is what
-// makes mục 1's leak observable at all: an argument's domain can contain ""
+// makes section 1's leak observable at all: an argument's domain can contain ""
 // without any shape looking like it leaks, because "" was never the value of
 // an actual row before this. See the file comment above for what QA's
 // mutate27.py found when "" was removed from the domain instead of added to

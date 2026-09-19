@@ -12,7 +12,7 @@ import (
 // values than the index has fields is a shape mismatch in the declaration
 // itself, not a caller's value bound() failed to encode, and task 0044 §1.2
 // says explicitly not to wrap it. A mutation that wraps every error bound()
-// returns in ErrArgument — "bọc rộng tay một dòng" — passes every other test
+// returns in ErrArgument — "a broad-handed, one-line wrap" — passes every other test
 // in this file and is caught here.
 //
 // Called directly rather than through Invoke: the ordinary declaration path
@@ -36,7 +36,7 @@ func TestBoundWithTooManyValuesStaysDeclaration(t *testing.T) {
 }
 
 // TestBoundNamesTheFieldAndSideForAnUnencodableValue is the direct proof of
-// task 0044 §1.2's "câu lỗi phải mang đủ ba thứ": which end (from/to), which
+// task 0044 §1.2's "the error message must carry all three things": which end (from/to), which
 // field, and keys' own error (which is where the Go type — %T — comes from).
 // Not "does not silently swallow the underlying error" as a general
 // assertion: an exact substring match on all three, plus a check that the

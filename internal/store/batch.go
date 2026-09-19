@@ -215,7 +215,7 @@ func satisfies(document map[string]any, conditions []Condition, values map[strin
 			// declared primary-key type (string or number — spec.go
 			// refuses TypeAny as a key type at Declare time), so key can
 			// never be a []any or a map[string]any here at all, cyclic or
-			// not. See the %v sweep table in task 0049's Kết quả for the
+			// not. See the %v sweep table in task 0049's Results for the
 			// rest of this function's %v call sites and why each one is
 			// safe or is not.
 			return fmt.Errorf("%w: %v in %q has no %q, and it must be %s",

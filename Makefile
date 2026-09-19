@@ -13,7 +13,7 @@ image:
 
 run: image
 	docker run --rm -p 7433:7433 \
-		-e SAPEDB_SECRET="$${SAPEDB_SECRET:?đặt SAPEDB_SECRET}" \
+		-e SAPEDB_SECRET="$${SAPEDB_SECRET:?set SAPEDB_SECRET}" \
 		-e SAPEDB_INSECURE=1 \
 		-v sapedb-data:/var/lib/sapedb \
 		sapedb:latest

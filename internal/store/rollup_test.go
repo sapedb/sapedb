@@ -801,7 +801,7 @@ func TestATotalReadOverARangeWithBothEndsNamedKeepsExactlyWhatIsBetweenThem(t *t
 		t.Errorf("b..d came back as %v, want %v", got, want)
 	}
 
-	// Self-check, per house-rules' "must NỚI, not just thu hẹp": the same
+	// Self-check, per house-rules' "must WIDEN, not just narrow": the same
 	// range read one group wider on each side must pick up exactly the one
 	// extra neighbor and nothing else — proof the table closes past its own
 	// edge rather than only at the point it happened to name.

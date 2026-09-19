@@ -253,7 +253,7 @@ func TestDumpAndRestoreGoThroughTheCommand(t *testing.T) {
 	// package's: a truncation landing mid-line — which cutting a real dump
 	// in half does, since it is not decoder.Decode aligned — reads as a
 	// JSON syntax error, and Restore wraps every one of those in
-	// ErrDumpFormat. This is the "vì gì" pin for the whole
+	// ErrDumpFormat. This is the "for what reason" pin for the whole
 	// TestARejectedArgumentLeavesTheDiskExactlyAsItFound family's dump/
 	// restore sibling, which that table itself does not cover.
 	assertRefusedBecause(t, errs, pinnedPhrases["dump/half a dump"])
@@ -495,14 +495,15 @@ func assertTreeUnchanged(t *testing.T, root string, before []string) {
 }
 
 // ---------------------------------------------------------------------------
-// Task 0061: a case that only asserts status != 0 cannot tell "hỏng vì gì"
-// (refused for the reason it claims to guard) from any of the package's
-// other ways to end up at exit 1 — a short password, empty stdin, a closed
-// port, ErrUsage's own catch-all. See house-rules.md's closing entry, "Khi
-// MỌI đường hỏng đều cho cùng một status, status không phân biệt được gì".
+// Task 0061: a case that only asserts status != 0 cannot tell "refused for
+// what reason" (refused for the reason it claims to guard) from any of the
+// package's other ways to end up at exit 1 — a short password, empty stdin,
+// a closed port, ErrUsage's own catch-all. See house-rules.md's closing
+// entry, "When EVERY failing path yields the same status, the status
+// distinguishes nothing."
 //
 // refusalLine and assertRefusedBecause below are what every case added or
-// tightened for this task runs its "vì gì" assertion through.
+// tightened for this task runs its "for what reason" assertion through.
 
 // refusalLine is the sentence a refusal leads with. Run (cli.go) prints the
 // whole usage constant — 1231 characters, 1233 bytes (len(usage) in Go
@@ -1308,7 +1309,7 @@ func TestARejectedArgumentLeavesTheDiskExactlyAsItFound(t *testing.T) {
 			t.Fatal("apply ran with its second file missing")
 		}
 		assertRefusedBecause(t, errs, pinnedPhrases["apply/missing file"])
-		// This is the index axis, not the "vì gì" axis: !Contains(out,
+		// This is the index axis, not the "for what reason" axis: !Contains(out,
 		// "collection") is the real shield against mutation A1
 		// (files -> files[:1]), which would still say "no such file or
 		// directory" for the wrong file — the wants pin above cannot tell
@@ -1596,7 +1597,7 @@ func TestARejectedArgumentLeavesTheDiskExactlyAsItFound(t *testing.T) {
 		assertTreeUnchanged(t, setup.dir, before)
 	})
 
-	// Case 17b: the "cổng đứng trước" case 17 above cannot rule out on its
+	// Case 17b: the "closed port" case 17 above cannot rule out on its
 	// own — a REAL server, listening, with the account/database this
 	// case's SAPEDB_SECRET/-ACCOUNT/-DB actually name. Section 3.2 of task
 	// 0061 calls the reason out by name: url and shell are both
@@ -1614,8 +1615,8 @@ func TestARejectedArgumentLeavesTheDiskExactlyAsItFound(t *testing.T) {
 	// control this case could be green because the secret is wrong, the
 	// account/db do not match, or the server has not called Serve yet —
 	// any of which also exits 1 and would make "-nope" look refused for
-	// the right reason when it is not. House rule: "một trần CHỈ TRỪ
-	// không bao giờ làm đỏ một khẳng định MỘT CHIỀU".
+	// the right reason when it is not. House rule: "a cap that only
+	// SUBTRACTS never turns a ONE-WAY assertion red".
 	t.Run("17b shell against a real, listening server (not a closed port)", func(t *testing.T) {
 		liveSecret := "the secret this live server for case 17b was started with"
 		live, err := server.New(server.Options{Dir: t.TempDir(), Secret: liveSecret})
@@ -1814,7 +1815,7 @@ func TestEveryCommandInTheTableHasARejectionCase(t *testing.T) {
 			if status == 0 {
 				t.Fatalf("%q ran when the case table says it must be refused", name)
 			}
-			// wants is a "vì gì" pin across all seven commands in one
+			// wants is a "for what reason" pin across all seven commands in one
 			// loop — cheap breadth, one line covering every entry in the
 			// table. Measured (task 0061's harness, H1 paired with P7,
 			// P10, P17, P18): removing THIS specific check does not, on

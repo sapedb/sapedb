@@ -113,7 +113,7 @@ func TestReversingAnIndexFlipsTheWholeDeclaredOrderNotEachField(t *testing.T) {
 // rounds of review each found a different declaration where that swap let a
 // caller-chosen direction reach rows no forward call of the same declaration
 // could, so round four removed the swap rather than refuse a fourth shape.
-// See scan.go's Range doc and task 0012, round 4, mục 1.
+// See scan.go's Range doc and task 0012, round 4, section 1.
 func TestReverseReadsTheSameStretchBackwardsNotADifferentOne(t *testing.T) {
 	_, collection := declared(t, 122)
 	fill(t, collection)
@@ -673,7 +673,7 @@ func TestAConstantAtOneEndDeclaresAndReadsOneStretchBothWays(t *testing.T) {
 
 	// And the same declaration with the constant matched at both ends still
 	// pins rather than floors, as it did before this round — round two's
-	// mệnh đề 1, which this round keeps.
+	// clause 1, which this round keeps.
 	deep.Name = "articles.deep_pin"
 	deep.To = &Endpoint{Terms: []Term{{Arg: "author"}, {Value: 3.0}}}
 	declareOp(t, store, deep)

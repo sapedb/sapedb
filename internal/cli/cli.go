@@ -498,9 +498,10 @@ func checkOldExtension(path string) error {
 // dbPath is where an (account, db) pair's file lives under dir. This is the
 // one expression in the tree that turns those three things into a path for
 // this side of the product — internal/server has its own, independent one
-// (see task 0053's own text, "Không có tầng nào hôm nay MỌI đường đều đi
-// qua" — there was no single layer both sides went through before this
-// task), and this function is what keeps this file from growing a second
+// (see task 0053's own text, "there is no single layer today that EVERY
+// path goes through" — there was no single layer both sides went through
+// before this task), and this function is what keeps this file from growing
+// a second
 // one of its own: both open() and oldPathHint(), below, call this instead
 // of writing filepath.Join again.
 func dbPath(opts options) string {
@@ -847,7 +848,7 @@ func changes(db *store.Store, args []string, out io.Writer) error {
 // an argument, because arguments are visible in ps to every user on the
 // machine. This is the check task 0058's mutation P12 nudges outward by one
 // (len(args) > 1 to len(args) > 2) to ask whether that guard is pinned to
-// N=2 by a real wall or only by coincidence — see the Kết quả table for the
+// N=2 by a real wall or only by coincidence — see the Results table for the
 // answer.
 //
 // The len(args) > 2 line below is not from the original task 0058 patch —

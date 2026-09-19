@@ -157,8 +157,8 @@ func TestEmptyNameUsageMessageIsUnchanged(t *testing.T) {
 	}
 }
 
-// TestOldPathHintOnlyAppearsWhenARealFileExists is mục 3's "TỪ CHỐI, KÈM
-// CHỈ ĐƯỜNG" decision, checked from both directions: no hint when there is
+// TestOldPathHintOnlyAppearsWhenARealFileExists is section 3's "REFUSE, WITH
+// A POINTER" decision, checked from both directions: no hint when there is
 // nothing to point at, and a hint with both paths — absolute, .sapedb and
 // .parts — when there is. Table because the encrypted and unencrypted
 // cases give operators two different, incompatible instructions (restore

@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// This file is task 0049's D10 lethality tests (§8: "một trong ba chỗ quay
-// lại %v trần — con QUAN TRỌNG NHẤT, chạy ba lần, mỗi lần một chỗ") plus two
-// tests backing the "blocked by structure" rows of task 0049 §4's %v sweep
-// table for sites this task did not touch.
+// This file is task 0049's D10 lethality tests (§8: "one of the three spots
+// that fall back to a bare %v — the MOST IMPORTANT mutant, run three times,
+// once for each spot") plus two tests backing the "blocked by structure" rows
+// of task 0049 §4's %v sweep table for sites this task did not touch.
 
 // checkedRequire declares a widgets collection and a batch operation with
 // one Require condition on the "tags" field — the exact shape satisfies

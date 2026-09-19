@@ -69,7 +69,7 @@ func TestAnExclusiveEndAloneDeclaresAndReadsOneStretchBothWays(t *testing.T) {
 }
 
 // TestATwoWayPagerWithBothEndsExclusiveDeclaresAndReadsBothWays is the shape
-// round three's mục 1 said the tightened rule had to leave available: a
+// round three's section 1 said the tightened rule had to leave available: a
 // keyset pager whose cursor and edge are both arguments and both exclusive,
 // so nobody re-sees the row they last read, whichever way they are paging.
 // It goes through DeclareOperation and Invoke — the real front door — rather
@@ -118,7 +118,7 @@ func TestATwoWayPagerWithBothEndsExclusiveDeclaresAndReadsBothWays(t *testing.T)
 }
 
 // TestByAuthorMissingPublishedReadsOneStretchBothWaysExclusiveIncluded is
-// round three's mục 1 test #2, re-measured: the leak was never a trick of
+// round three's section 1 test #2, re-measured: the leak was never a trick of
 // the empty string. by_author is (author ascending, published number,
 // Descending, MissingLast). Descending flips the byte order of published and
 // MissingLast then sorts a document with no published date after that

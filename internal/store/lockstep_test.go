@@ -19,7 +19,7 @@ import (
 //
 // lockstepStore is the one fixture every test in this file shares, built
 // wide enough that the eleven mutations Planner 0054 found surviving (see
-// the task doc, mục 1.1) each have a case that can only pass by reading the
+// the task doc, section 1.1) each have a case that can only pass by reading the
 // right field at the right position. Every test below either tries to make
 // a "must be refused" claim false (a case the refusal does not catch), or
 // tries to make an "must be accepted" claim false (a case an over-tight
@@ -64,7 +64,7 @@ func lockstepStore(t *testing.T, seed int64) *Store {
 			// byte shapes rather than two spellings of the same one — with
 			// same-direction fields, a bug that reads fields[0] everywhere
 			// produces the identical bytes a correct read would, and
-			// nothing distinguishes them. See mục 4.2 of the task doc.
+			// nothing distinguishes them. See section 4.2 of the task doc.
 			{Name: "w2", Fields: []Field{
 				{Path: "a", Type: TypeString, Missing: MissingSkip},
 				{Path: "n", Type: TypeNumber, Descending: true, Missing: MissingLast},
@@ -158,7 +158,7 @@ func lockstepStore(t *testing.T, seed int64) *Store {
 }
 
 // mustNameOnly asserts a refusal names exactly one field. It is written as a
-// dương-âm pair on purpose: the field names in this fixture are one
+// positive-negative pair on purpose: the field names in this fixture are one
 // character long ("a", "n", "b", "z"), and every refusal here begins with
 // "sapedb/store:" — a string that itself contains "n" — so a bare
 // strings.Contains(err, wanted) without the negative half would pass no
@@ -225,7 +225,7 @@ func TestAScanOfAPartitionedCollectionRefusesALooseFieldAtEveryPosition(t *testi
 }
 
 // TestAScanOfAPartitionedCollectionAcceptsEveryFieldPinnedAtEveryWidth is
-// the widening half of the rule above (task 0054 mục 5, P22) — a patch that
+// the widening half of the rule above (task 0054 section 5, P22) — a patch that
 // closes "a loose field is refused" by over-tightening the check would show
 // up here, refusing a scan that pins ALL of its fields. Three widths: N=1
 // is the shape every pre-existing index has and must keep working; N=2 and
@@ -297,7 +297,7 @@ func TestARollupReadOfAPartitionedCollectionAcceptsAFullyPinnedGroup(t *testing.
 // written against, not fields[0]. The scan half uses w3 so the wrong value
 // can land in the middle field (n) or the last one (b); the rollup half
 // mirrors it on g2's second field, which is the one that had no coverage
-// anywhere in the repo before this task (mục 1.1: M6 sống, M7 chết — the
+// anywhere in the repo before this task (section 1.1: M6 SURVIVED, M7 KILLED — the
 // same line of code in the two branches of one switch).
 func TestABoundIsTypeCheckedAgainstItsOwnFieldNotAnother(t *testing.T) {
 	store := lockstepStore(t, 5405)
@@ -332,7 +332,7 @@ func TestABoundIsTypeCheckedAgainstItsOwnFieldNotAnother(t *testing.T) {
 // check() above, and keys.Encode is the thing that actually refuses it.
 //
 // This test does NOT cover the rollup-side twin of this same line (M8 /
-// task 0054 mục 1.3, "P12") — that one needs a NUMBER, not a slice, and has
+// task 0054 section 1.3, "P12") — that one needs a NUMBER, not a slice, and has
 // its own test right below: TestARollupBoundaryNumberNamesItsOwnField. An
 // earlier version of this comment claimed "Rollup.validate() refuses TypeAny
 // for a Group field, so constantIsEncodable's rollup branch has no
@@ -372,7 +372,7 @@ func TestAnUnencodableConstantBoundIsNamedAtItsOwnField(t *testing.T) {
 // only float64), so both reach constantIsEncodable on the rollup branch —
 // the exact line M8/P12 mutates — and this is the case that mutant cannot
 // survive: mutated to fields[0], the refusal names "account" instead of
-// "amt". g2 (mục 4's original two-field rollup, both fields TypeString)
+// "amt". g2 (section 4's original two-field rollup, both fields TypeString)
 // cannot reach this at all: every string constant is encodable, so there is
 // no live error path through IT specifically — g2 and gnum are not
 // redundant, they cover different halves of what TypeAny closes and what it
@@ -396,11 +396,11 @@ func TestARollupBoundaryNumberNamesItsOwnField(t *testing.T) {
 }
 
 // TestAWriteWithAnUnencodableFieldNamesItsOwnField is the WRITE-side
-// equivalent of the test above — QA 0044's debt (mục 1), confirmed still
+// equivalent of the test above — QA 0044's debt (section 1), confirmed still
 // open at 5a482ea (M14 SURVIVED) and closed here. entriesForIndex
 // (collection.go) is a parallel path to constantIsEncodable, not the same
-// function, and house-rules.md's "chỗ đầu tiên phải tự soi là ĐƯỜNG TƯƠNG
-// ĐƯƠNG" is exactly the shape this pair is: a read path that was tested and
+// function, and house-rules.md's "the first place to check is the
+// EQUIVALENT PATH" is exactly the shape this pair is: a read path that was tested and
 // a write path, doing the equivalent check, that was not.
 func TestAWriteWithAnUnencodableFieldNamesItsOwnField(t *testing.T) {
 	_, store := fresh(t, 5407)
@@ -465,7 +465,7 @@ func TestABackwardsRangeInASecondOrThirdFieldIsRefused(t *testing.T) {
 }
 
 // TestACorrectlyOrderedDescendingRangeIsAcceptedAndReadsAllRows is the
-// widening half of the test above (task 0054 mục 5, P23): a stretch that IS
+// widening half of the test above (task 0054 section 5, P23): a stretch that IS
 // ordered correctly for a descending field must be accepted, and it must
 // come back with the right ROWS, not just no error — an over-tight
 // refusedBackwardsRange could satisfy "no error" while still, say, refusing
@@ -514,9 +514,9 @@ func TestACorrectlyOrderedDescendingRangeIsAcceptedAndReadsAllRows(t *testing.T)
 // TestAThreeFieldScanReadsExactRowsProvingEachFieldUsesItsOwnPosition is the
 // one test in this file that reads real data back through a three-field
 // index rather than only checking that a declaration is accepted or
-// refused — task 0054 mục 4.3's row for boundAt/entriesForIndex/encodings/
-// keys.EncodeKey/keys.DecodeKey ("một bound không được mã hoá bằng encoding
-// của trường đầu"), and the ONLY case in this file that distinguishes
+// refused — task 0054 section 4.3's row for boundAt/entriesForIndex/encodings/
+// keys.EncodeKey/keys.DecodeKey ("a bound must not be encoded with the
+// first field's encoding"), and the ONLY case in this file that distinguishes
 // fields[2] from a mutant clamping it to fields[min(2,1)] — P16 in the task
 // doc. That mutant is byte-for-byte identical to correct code at every
 // index <= 1, so no N<=2 fixture, however carefully written, can ever make
@@ -578,8 +578,8 @@ func TestAThreeFieldScanReadsExactRowsProvingEachFieldUsesItsOwnPosition(t *test
 // TestARollupGroupWithTwoDifferentDirectionsTotalsEachCombinationSeparately
 // exercises keys.EncodeKey and keys.DecodeKey with a two-field rollup group
 // where the two fields do NOT share a direction — the shape that, before
-// this task, existed nowhere in the repo (task doc mục 1.2: "nhóm rollup
-// nhiều hơn một trường: KHÔNG CÓ, ở bất kỳ đâu"). Every write to a group
+// this task, existed nowhere in the repo (task doc section 1.2: "a rollup
+// group with more than one field: DOES NOT EXIST, anywhere"). Every write to a group
 // goes through groupKey (rollup.go), which calls keys.EncodeKey once for
 // the whole Group; every read decodes the same bytes with keys.DecodeKey.
 // A version of either that used fields[0]'s encoding for every position

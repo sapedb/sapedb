@@ -4,7 +4,7 @@ import "testing"
 
 // TestABackwardsBoolRangeIsAcceptedRatherThanRefused pins a real, measured
 // gap in task 0045's promise, found while building task 0054's case table
-// (mục 3.4 of the task doc) rather than something this task fixes.
+// (section 3.4 of the task doc) rather than something this task fixes.
 //
 // Task 0045 made stretch() (scan.go) refuse a From that sorts after To,
 // rather than silently reading as an empty stretch. The refusal is keyed on

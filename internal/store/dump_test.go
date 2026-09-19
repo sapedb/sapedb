@@ -434,7 +434,7 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		put(t, collection, map[string]any{
 			"id": fmt.Sprintf("k%02d", i), "author": "ann",
-			"title": fmt.Sprintf("Bí mật số %d", i), "slug": fmt.Sprintf("s%02d", i),
+			"title": fmt.Sprintf("Secret number %d", i), "slug": fmt.Sprintf("s%02d", i),
 			"published": float64(i),
 		})
 	}
@@ -445,7 +445,7 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 	image := disk.Durable()
 	// Not the documents, not the field names, not the names of the collections
 	// or the indexes — all of those are written through the same pages.
-	for _, text := range []string{"Bí mật số 7", "author", "ann", "articles", "by_author", "s07"} {
+	for _, text := range []string{"Secret number 7", "author", "ann", "articles", "by_author", "s07"} {
 		if bytes.Contains(image, []byte(text)) {
 			t.Errorf("the file holds %q in the open", text)
 		}
@@ -471,7 +471,7 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("get: %v, %v", found, err)
 	}
-	if document["title"] != "Bí mật số 7" {
+	if document["title"] != "Secret number 7" {
 		t.Errorf("the document reads %v", document)
 	}
 	if entries := scan(t, after, "by_author", Range{}); len(entries) != 50 {

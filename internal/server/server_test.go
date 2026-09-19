@@ -1111,8 +1111,8 @@ func TestARejectedSignatureLeavesExactlyOneNoticeLine(t *testing.T) {
 	// but handshake() wraps a bad signature as "%w: %v" with ErrHandshake in
 	// the %w slot — so the chain errors.Is walks only ever reaches
 	// ErrHandshake, and the code a client actually receives here is
-	// "handshake", not "signature". Task 0048 mục 6 named "signature"; mục 2
-	// of the same task already hedges with "signature hoặc handshake", and
+	// "handshake", not "signature". Task 0048 section 6 named "signature";
+	// section 2 of the same task already hedges with "signature or handshake", and
 	// codeFor/handshake() are explicitly out of scope for this task, so this
 	// test asserts what the code actually does rather than what one line of
 	// the task guessed it did.
@@ -1138,7 +1138,7 @@ func TestARejectedSignatureLeavesExactlyOneNoticeLine(t *testing.T) {
 // a negative assertion against the exact line case-1's scenario produces,
 // because a Notice that echoed the hello payload would be a second place a
 // secret can leak, right next to the one this task's own design decision
-// (mục 3, quyết định A.1) says must never happen.
+// (section 3, decision A.1) says must never happen.
 func TestARejectedHandshakeNoticeNeverCarriesTheSignatureOrPassword(t *testing.T) {
 	_, address, said := runningNoticed(t)
 
@@ -1286,8 +1286,8 @@ func TestAFrameBeforeHelloGetsOneLineNamingTheFrame(t *testing.T) {
 	}
 }
 
-// TestAFailureAfterAGoodHandshakeAlsoGetsOneLine is case 7, ngoài mục 6's
-// table: 0048's own equivalence axis is handshake-time failure versus
+// TestAFailureAfterAGoodHandshakeAlsoGetsOneLine is case 7, outside section
+// 6's table: 0048's own equivalence axis is handshake-time failure versus
 // serving-time failure, and a Notice that only fires for errors.Is(err,
 // ErrHandshake) — mutation G5 — would pass every one of cases 1, 2 and 5
 // above, because all three really are ErrHandshake. This is the test that
@@ -1347,8 +1347,8 @@ func TestAFailureAfterAGoodHandshakeAlsoGetsOneLine(t *testing.T) {
 }
 
 // The three tests below call guard directly, not through a running server —
-// task 0049 §6 asks for exactly that ("gọi thẳng guard chứ không qua một
-// tiến trình thật"), since a guard that actually finished dying would end
+// task 0049 §6 asks for exactly that ("call guard directly, not through a
+// real process"), since a guard that actually finished dying would end
 // the test binary along with it. net.Pipe gives two connected, unbuffered
 // net.Conn ends without opening a real socket: guard writes to one end from
 // inside the panicking goroutine below, and a reader goroutine on the other
@@ -1435,7 +1435,7 @@ func TestGuardSendsANoticeLineAFailureFrameAndPanicsAgainWithTheOriginalValue(t 
 }
 
 // TestGuardOnAnErrorPanicPreservesItsErrorsIsIdentity is the other half of
-// mục 6's third assertion: when the panic value already IS an error, guard
+// section 6's third assertion: when the panic value already IS an error, guard
 // must not have re-wrapped it with %v (or anything else) on the way to
 // failure() — this is the exact shape task 0049's brief warned against,
 // citing handshake()'s fmt.Errorf("%w: %v", ErrHandshake, err) dropping
@@ -1490,7 +1490,7 @@ func TestGuardOnAnErrorPanicPreservesItsErrorsIsIdentity(t *testing.T) {
 		if err := json.Unmarshal(got.frame.Payload, &body); err != nil {
 			t.Fatalf("failure payload does not read as JSON: %v\n%s", err, got.frame.Payload)
 		}
-		// codeFor is explicitly not touched by this task (mục 5) and a
+		// codeFor is explicitly not touched by this task (section 5) and a
 		// panic gets no code of its own — but codeFor's own errors.Is
 		// loop runs against whatever error guard hands it, and
 		// store.ErrCondition IS one of its known sentinels. If guard had
@@ -1507,8 +1507,8 @@ func TestGuardOnAnErrorPanicPreservesItsErrorsIsIdentity(t *testing.T) {
 
 // TestGuardInOneGoroutineDoesNotProtectAPanicInAnotherGoroutine measures,
 // rather than asserts, the first limit task 0049's brief asked to see
-// written down "ngay cạnh code, đừng để một câu 'never' trần" instead of
-// argued about: recover() only ever catches a panic unwinding through its
+// written down "right next to the code, not left as a bare 'never' claim"
+// instead of argued about: recover() only ever catches a panic unwinding through its
 // OWN goroutine's defer stack. guard is deferred once, in Serve's
 // per-connection goroutine — but Handle can start a second goroutine off
 // that same connection for a live subscription (subscribe.go's

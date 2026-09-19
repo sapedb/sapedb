@@ -11,7 +11,7 @@ import (
 )
 
 // TestEveryIndexedFieldListReadIsOnTheList is the structural half of task
-// 0054 — the bảng ca above (lockstep_test.go) only proves the lockstep
+// 0054 — the case table above (lockstep_test.go) only proves the lockstep
 // property holds at the sites that exist TODAY. It says nothing about a
 // SEVENTEENTH place that starts indexing into Fields/Terms/Group next
 // month (the list below has exactly 16 entries — Reviewer 0054 measured
@@ -50,7 +50,7 @@ import (
 // walks its terms with "for _, term := range endpoint.Terms" — a range over
 // values, not an index — so a rewrite of it that silently stops after the
 // first term (the exact shape of mutant M3 in the task doc, which the
-// bảng ca in lockstep_test.go catches and this structural test does not)
+// case table in lockstep_test.go catches and this structural test does not)
 // matches none of these patterns and is invisible here. Only the case table
 // catches that shape; this test only catches a NEW index-shaped reader
 // showing up unnoticed.
@@ -59,7 +59,7 @@ var indexedListRead = regexp.MustCompile(
 
 var funcDeclaration = regexp.MustCompile(`^func\s+(?:\([^)]*\)\s+)?([A-Za-z_][A-Za-z0-9_]*)`)
 
-// knownIndexedListReaders is task 0054 mục 2.3's list, measured on this
+// knownIndexedListReaders is task 0054 section 2.3's list, measured on this
 // repo at HEAD by the scan below — one line per function, each with the
 // reason it belongs. package.Function is store's or keys's exported name,
 // not the receiver type, since the point of this list is which FUNCTION

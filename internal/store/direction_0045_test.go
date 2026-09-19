@@ -14,9 +14,9 @@ import (
 // plus the one shape that must NOT be refused: two ends pinned to the same
 // point on purpose.
 
-// TestABackwardsRangeIsNeverSilentlyEmpty is the bảng ca for mục 6's first
-// row: every axis a backwards range can be written on, crossed with both
-// directions. house-rules ("một khẳng định phổ quát cần một BẢNG") — each
+// TestABackwardsRangeIsNeverSilentlyEmpty is the case table for section 6's
+// first row: every axis a backwards range can be written on, crossed with
+// both directions. house-rules ("a universal claim needs a TABLE") — each
 // row differs from its neighbours on exactly one axis, and every row must
 // come back ErrArgument or ErrDeclaration, in BOTH Forward and Reverse,
 // never a silently empty result.
@@ -181,7 +181,7 @@ func TestABackwardsRangeIsNeverSilentlyEmpty(t *testing.T) {
 	_ = widgets
 }
 
-// TestAPinnedEmptyRangeStillRuns is mục 6's second row and the task's own
+// TestAPinnedEmptyRangeStillRuns is section 6's second row and the task's own
 // "most important mutation": lower == upper is a range someone wrote on
 // purpose — an Exclusive bound pinned against an Inclusive one at the SAME
 // point — and it must keep running rather than join the backwards case. Both
@@ -245,7 +245,7 @@ func TestBothEndsExclusiveAtOnePointIsRefused(t *testing.T) {
 	})
 }
 
-// TestAnUnboundedAboveScanIsNeverRefused is mục 6's third row: the
+// TestAnUnboundedAboveScanIsNeverRefused is section 6's third row: the
 // `upper != nil` guard in stretch() exists so that a caller who wrote no
 // upper bound at all is never compared against one. `Walk` (dump) and a scan
 // naming only From are the two everyday shapes; the successor()-returns-nil
@@ -296,7 +296,7 @@ func TestAnUnboundedAboveScanIsNeverRefused(t *testing.T) {
 	}
 }
 
-// TestAMissingEndAtCallTimeIsNeverRefused is mục 6's fourth row and task
+// TestAMissingEndAtCallTimeIsNeverRefused is section 6's fourth row and task
 // 0016's boundary: `bounds()` (invoke.go) drops a whole Bound when its
 // argument was not passed, in both directions, and that must read as
 // "unbounded on that side", never as a backwards range — dropping a Bound
@@ -348,7 +348,7 @@ func TestAMissingEndAtCallTimeIsNeverRefused(t *testing.T) {
 	_ = collection
 }
 
-// TestADeclarationAcceptsAMixedEndUntilACallProvesItBackwards is mục 6's
+// TestADeclarationAcceptsAMixedEndUntilACallProvesItBackwards is section 6's
 // sixth row: refusedBackwardsRange (ops.go) only runs when EVERY term of
 // BOTH endpoints is a constant — the moment either end is an argument, the
 // value does not exist yet, and DeclareOperation must accept the shape. The
@@ -379,8 +379,8 @@ func TestADeclarationAcceptsAMixedEndUntilACallProvesItBackwards(t *testing.T) {
 	_ = collection
 }
 
-// TestATotalsInheritsTheSameRefusal is mục 3.4's Totals row and mục 6's
-// seventh row: Collection.Totals calls the same stretch() Scan does (task
+// TestATotalsInheritsTheSameRefusal is section 3.4's Totals row and section
+// 6's seventh row: Collection.Totals calls the same stretch() Scan does (task
 // 0043), so it inherits the refusal for free — but "for free" is a claim
 // about the CODE, and this is the measurement that it is also true of the
 // declared path (validateOperation's ActionTotals branch) and the Invoke

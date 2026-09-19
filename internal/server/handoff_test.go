@@ -6,7 +6,7 @@
 // server_test.go runs the server on the server's own files. Each side has
 // only ever agreed with itself — the exact shape that let two copies of a
 // key-derivation label drift silently apart (see internal/dbkey), and the
-// exact shape house-rules.md's "Chạy thật" section names as having let three
+// exact shape house-rules.md's "Run For Real" section names as having let three
 // real contract mismatches through unit tests before.
 //
 // It is also the only thing in the suite that catches that mine being laid

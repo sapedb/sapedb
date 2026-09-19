@@ -242,7 +242,7 @@ func TestSameValueAgreesOnEqualAndDifferentValuesAtEveryDepth(t *testing.T) {
 // are actually ["a","z"]. This is a table over which index is the one that
 // differs, not a single repro, because house-rules says a universal
 // property needs every position on its axis checked, not the one position a
-// bug happened to be found at (the "một khẳng định phổ quát cần một BẢNG"
+// bug happened to be found at (the "a universal claim needs a TABLE"
 // rule).
 func TestSameValueComparesEveryArrayElementNotJustTheFirst(t *testing.T) {
 	if !sameValue([]any{"a", "b", "c"}, []any{"a", "b", "c"}) {

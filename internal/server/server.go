@@ -203,7 +203,7 @@ func (s *Server) Serve(listener net.Listener) error {
 // Goroutine (server_test.go), which is the general case (any two
 // goroutines, not stream specifically) because reaching an actual panic
 // inside stream would need a separate task's worth of fault injection.
-// Giving stream its own guard is future work this task does not do: mục 5
+// Giving stream its own guard is future work this task does not do: section 5
 // keeps this task's touch to guard and Serve.
 //
 // What it actually buys, measured against having nothing here at all: a
@@ -235,7 +235,7 @@ func guard(conn net.Conn, notice func(string)) {
 	// with fmt.Errorf("%w: %v", ErrHandshake, err) — %v, not %w, on the
 	// inner error — and that single wrong verb is why codeFor reports a
 	// signature failure as "handshake" instead of "signature" (logged as
-	// a debt, not fixed here: mục 5 of this task keeps codeFor and
+	// a debt, not fixed here: section 5 of this task keeps codeFor and
 	// handshake() out of scope). This file does not repeat that shape: a
 	// panic value that is already an error is passed through as-is, not
 	// re-wrapped with %v or %w. A panic value that was never an error —
@@ -245,7 +245,7 @@ func guard(conn net.Conn, notice func(string)) {
 	// gain a new code for this: whatever it already returns (usually
 	// "failed", the word for "this build does not have a nearer answer"),
 	// unless the panic value happened to already be one of its known
-	// sentinels, is left alone. See mục 5 of task 0049 for why that line
+	// sentinels, is left alone. See section 5 of task 0049 for why that line
 	// is not to be touched here.
 	var err error
 	if asErr, ok := recovered.(error); ok {

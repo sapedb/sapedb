@@ -125,7 +125,7 @@ func TestTheDelimiterKeepsTwoSplitsApart(t *testing.T) {
 
 func TestPasswordCharset(t *testing.T) {
 	good := []string{strings.Repeat("y", 16), strings.Repeat("y", 128), "aA0._~-aA0._~-aA0"}
-	bad := []string{strings.Repeat("y", 15), strings.Repeat("y", 129), "mật-khẩu-đủ-dài-rồi", "has spaces here!", "colon:in-password"}
+	bad := []string{strings.Repeat("y", 15), strings.Repeat("y", 129), "zürich-passwörd-2024", "has spaces here!", "colon:in-password"}
 
 	for _, p := range good {
 		if !ValidPassword(p) {

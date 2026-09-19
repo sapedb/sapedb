@@ -197,7 +197,7 @@ func (c *Collection) walkRange(within Range, visit func(key any, document map[st
 // declaration can never match anything, with any argument". Refusing it here
 // means every caller of stretch() — Scan, walkRange (so Walk and dump too),
 // and Totals after task 0043 put it on the same path — inherits the refusal
-// for free, which is the point of task 0045 mục 1: one calculation, one
+// for free, which is the point of task 0045 section 1: one calculation, one
 // place a caller-shaped mistake in it is caught.
 //
 // upper != nil guards this on purpose, not defensively: successor() (below)

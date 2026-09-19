@@ -49,8 +49,8 @@ func runWithDeadline(t *testing.T, name string, limit time.Duration, fn func() s
 // fmt.Sprintf("%v", v) itself produces — compared against the real fmt call
 // in this test, not against a string copied out of the task file by hand
 // (copying it by hand is exactly the mistake the house rules call out:
-// "chạy chương trình lấy chuỗi thật rồi so, đừng chép tay từ file task
-// sang").
+// "run the program to get the real string then compare, don't hand-copy it
+// from the task file").
 func TestDescribeOfAnOrdinaryScalarIsByteIdenticalToFmtSprintfV(t *testing.T) {
 	for _, v := range []any{
 		nil, true, false, 1.0, "x", "", []any{}, map[string]any{},
@@ -145,8 +145,8 @@ func TestDescribeOfADepth5TreeIsByteIdenticalToFmtSprintfV(t *testing.T) {
 // TestDescribeOfADepth6TreeIsStillByteIdenticalToFmtSprintfV closes a gap
 // task 0049 §6's own table leaves: its two depth cases are 5 (inside) and 7
 // (outside), which never actually exercises the boundary value itself, 6.
-// House rule "tự kiểm một bảng ca: phải NỚI, không chỉ THU HẸP" is about
-// exactly this shape of gap — D2 (§8: max depth 6 → 5) would survive a
+// House rule "self-checking a case table: you must WIDEN, not just NARROW"
+// is about exactly this shape of gap — D2 (§8: max depth 6 → 5) would survive a
 // suite that only ever tried 5 and 7, because both of those give the same
 // answer whether the ceiling is 5 or 6. A depth-6 case does not.
 func TestDescribeOfADepth6TreeIsStillByteIdenticalToFmtSprintfV(t *testing.T) {
@@ -158,7 +158,7 @@ func TestDescribeOfADepth6TreeIsStillByteIdenticalToFmtSprintfV(t *testing.T) {
 	// this exact mistake, made with describeMaxDepth here and
 	// describeMaxElementsPerLevel in cases 4/5 below, was tried first and
 	// let D1, D2 and D4 (task 0049 §8) all survive — see this task's
-	// Kết quả for the mutation run that caught it and the fixed run after.
+	// Results for the mutation run that caught it and the fixed run after.
 	v := nestedTree(6, "leaf")
 	want := fmt.Sprintf("%v", v)
 	got := describe(v)
@@ -331,8 +331,8 @@ func TestDescribeOfATenKilobyteLeafStringIsCutByLengthNotDepth(t *testing.T) {
 // --- Self-check: where no counterexample was found, and what was tried ------
 //
 // TestDescribeSurvivesAWideVarietyOfHandBuiltShapes is not one of the nine
-// required cases; it is the record of "what miền was actually tried" the
-// task's own Kết quả section is required to report, run as an actual test
+// required cases; it is the record of "what domain was actually tried" the
+// task's own Results section is required to report, run as an actual test
 // rather than only prose. Every shape here returns within a fixed budget
 // and produces valid, bounded output — a self-check, not a proof, but one
 // that runs on every `go test` rather than only in this task's memory.

@@ -10,7 +10,7 @@ import (
 )
 
 // TestAnOperatorWhoTypesTheEndsBackwardsSeesOneLineNotAGoError is task 0045's
-// mục 3.4 fourth caller of stretch(): Explore, which is what an operator
+// section 3.4 fourth caller of stretch(): Explore, which is what an operator
 // typing "from ... to ..." at the shell runs underneath. The same refusal
 // that DeclareOperation and Invoke get must reach here too, and it must
 // arrive the way every other shell mistake does — one line the operator can
