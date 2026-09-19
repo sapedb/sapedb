@@ -13,7 +13,9 @@
     "failure": 7,
     "subscribe": 8,
     "event": 9,
-    "goodbye": 10
+    "goodbye": 10,
+    "elevate": 11,
+    "explore": 12
   },
   "cases": [
     {
@@ -72,6 +74,40 @@
       },
       "payloadHex": "7b226d657373616765223a226e6f7420666f756e6420e2809420cf8020e4b896e7958c20f09f8c8f227d",
       "frameHex": "0107000000090000002a7b226d657373616765223a226e6f7420666f756e6420e2809420cf8020e4b896e7958c20f09f8c8f227d"
+    },
+    {
+      "name": "elevate: the proof answering the welcome's challenge",
+      "type": 11,
+      "id": 5,
+      "json": {
+        "proof": "8f2b7c1a9e3d5f60b4a1c7d2e8f90a3b5c6d7e8f90a1b2c3d4e5f60718293a4b"
+      },
+      "payloadHex": "7b2270726f6f66223a2238663262376331613965336435663630623461316337643265386639306133623563366437653866393061316232633364346535663630373138323933613462227d",
+      "frameHex": "010b000000050000004c7b2270726f6f66223a2238663262376331613965336435663630623461316337643265386639306133623563366437653866393061316232633364346535663630373138323933613462227d"
+    },
+    {
+      "name": "explore: a typed get, on a connection that has proved it may",
+      "type": 12,
+      "id": 6,
+      "json": {
+        "access": {
+          "kind": "get",
+          "collection": "notes",
+          "key": "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        }
+      },
+      "payloadHex": "7b22616363657373223a7b226b696e64223a22676574222c22636f6c6c656374696f6e223a226e6f746573222c226b6579223a22303141525a334e44454b54535634525246465136394735464156227d7d",
+      "frameHex": "010c00000006000000517b22616363657373223a7b226b696e64223a22676574222c22636f6c6c656374696f6e223a226e6f746573222c226b6579223a22303141525a334e44454b54535634525246465136394735464156227d7d"
+    },
+    {
+      "name": "explore: catalogue instead of an access",
+      "type": 12,
+      "id": 8,
+      "json": {
+        "catalogue": true
+      },
+      "payloadHex": "7b22636174616c6f677565223a747275657d",
+      "frameHex": "010c00000008000000127b22636174616c6f677565223a747275657d"
     }
   ]
 }
