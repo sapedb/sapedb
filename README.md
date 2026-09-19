@@ -135,13 +135,23 @@ TypeScript client calling the Go server. Three contract mismatches between the
 two repositories passed every unit test on both sides, because each side agreed
 with itself. Only running them together found any of them.
 
-## The shared fixture
+## The shared fixtures
 
-`fixtures/signing.json` carries connection triples with their expected digests.
-Both this repository's tests and `@ecosy/sapedb`'s read it, so a change to the
-contract turns both suites red at once — instead of arriving as a user who
-cannot connect, with nothing in a log to say which side is wrong.
+`fixtures/signing.json` carries connection triples with their expected digests,
+and `fixtures/frames.json` carries wire frames with the bytes they encode to.
+This repository's tests and `@ecosy/sapedb`'s both read both files, so a
+contract change that lands in both copies turns both suites red at once —
+instead of arriving as a user who cannot connect, with nothing in a log to say
+which side is wrong.
 
-It proves the two implementations of one *function* agree. It does not prove the
-two sides *call* that function with the same arguments, which is a lesson this
-project paid for once.
+"Shared" is the intent, and the gap between it and the mechanism is worth
+stating plainly: these are two files in two repositories, kept identical by
+hand. Nothing compares them. A change made to one copy reddens one suite while
+the other stays green and disagrees — which has already happened here, for ten
+minutes, seen by neither side. Until the fixtures are published as one artifact
+both repositories consume, the sentence above describes a workflow, not a
+guarantee.
+
+They prove the two implementations of one *function* agree. They do not prove
+the two sides *call* that function with the same arguments, which is a lesson
+this project paid for once.
