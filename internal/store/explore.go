@@ -190,7 +190,14 @@ type Catalogue struct {
 // somebody who should be here would ask. A log that shows the scan but not the
 // question that found the collection to scan tells half the story.
 func (s *Store) WhatIsHere(caller Caller) (Catalogue, error) {
-	here := Catalogue{}
+	// Collections starts as an empty slice, not nil: on a database with
+	// nothing declared yet the loop below never appends, and a nil slice with
+	// no `omitempty` on the tag marshals as JSON `null` rather than `[]`. A
+	// caller that reaches straight for `.map()`/`for...of` on this field —
+	// the ordinary way to use an array — breaks exactly on the database that
+	// most needs the catalogue read to work: the one nobody has declared
+	// anything in yet.
+	here := Catalogue{Collections: []Spec{}}
 
 	for _, name := range s.Collections() {
 		collection, err := s.Collection(name)

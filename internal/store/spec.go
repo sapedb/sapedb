@@ -69,7 +69,21 @@ type Spec struct {
 	// ID and the counters are assigned by the store. They are in the stored
 	// descriptor so that adding an index never renumbers the ones already
 	// there — an index id is written into every one of its keys.
-	ID           uint32 `json:"id"`
+	ID uint32 `json:"id"`
+
+	// NextIndexID and NextRollupID keep their underscored tags on purpose,
+	// unlike every other multi-word field this package puts on the wire.
+	// Spec is round-tripped through json.Marshal/Unmarshal to the on-disk
+	// catalogue (see writeSpec/load in store.go), not just to a client, and
+	// every collection declared by an earlier server is sitting on disk with
+	// these two keys spelled exactly this way. Renaming the tag would not
+	// touch what is already stored: json.Unmarshal silently leaves the field
+	// at zero when a key does not match, so the very next `Declare` on an
+	// existing collection would start handing out index/rollup ids from 0
+	// again — colliding with ids already live in that collection's index
+	// keys. That is a correctness bug, not a style one, so it is not "fixed"
+	// without a migration that rewrites every stored Spec first. See
+	// CHANGELOG and the matching note in ecosy-sapedb's CollectionSpec.
 	NextIndexID  uint16 `json:"next_index_id"`
 	NextRollupID uint16 `json:"next_rollup_id"`
 }

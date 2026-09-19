@@ -7,6 +7,32 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Changed
 
+- `Catalogue.Collections` (the `here.collections` field a `catalogue` explore
+  answers with) now marshals as `[]` on a database with nothing declared yet,
+  instead of `null`. Before this change, `WhatIsHere` started from a nil
+  slice and only ever appended to it, so an empty database — every new
+  user's first read — answered `{"collections":null,"operations":[]}`. A
+  caller that reaches straight for `.map()`/`for...of` on `collections`, the
+  ordinary way to use an array, broke on exactly that database. Fixed at
+  `WhatIsHere` (`internal/store/explore.go`), where the slice now starts
+  empty rather than nil, not at the marshaling boundary.
+
+- `Bound.Values` and `Bound.Exclusive` (the ends of a scan's `from`/`to`,
+  inside an `Access`) now carry `json:"values"` and
+  `json:"exclusive,omitempty"` tags. Before this change they had no tag at
+  all, so Go marshaled them as `Values`/`Exclusive` (capitalized) while the
+  TypeScript client has always written them lower-case; the only thing that
+  made a request from that client parse was `encoding/json`'s
+  case-insensitive fallback on unmarshal, not an agreed contract. This also
+  changes what sapedb's *own* embedded Go client (`internal/wire`, used by
+  the CLI) writes when it sends an `Access` to the server: it used to emit
+  `Values`/`Exclusive` like any other untagged Go struct, and now emits
+  `values`/`exclusive`, matching the TypeScript client. No caller inspecting
+  the wire bytes of a `Bound` by field name is known to exist yet — this is
+  believed to be pure convergence, not a break — but any archived request
+  bytes or fixtures captured with the old, untagged spelling would need
+  updating if one turns up.
+
 - A scan or a rollup read whose `from` sorts after its `to` is refused
   instead of run. Before this change, such a declaration read back an empty
   result — no `rows`, no error, no `truncated` — indistinguishable on the

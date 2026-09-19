@@ -16,8 +16,8 @@ import (
 // case: an index on (author, published) is scanned for one author by giving
 // one value.
 type Bound struct {
-	Values    []any
-	Exclusive bool
+	Values    []any `json:"values"`
+	Exclusive bool  `json:"exclusive,omitempty"`
 }
 
 // Direction is which way along an index a walk runs.
