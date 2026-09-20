@@ -404,3 +404,84 @@ func TestStartRefusesAConfigItWouldNotHaveRead(t *testing.T) {
 		})
 	}
 }
+
+// TestFollowingIsReadFromTheEnvironmentAndIsAlsoWhatMakesAServerReadOnly is
+// the configuration half of follower mode.
+//
+// Two things are measured rather than one. The connection string is taken
+// apart at startup, so a typo in it stops the daemon where somebody is
+// watching instead of failing at the first reconnection, in a log nobody
+// reads. And being a follower is the same switch as refusing writes: a daemon
+// that applied somebody else's log while taking writes of its own is the one
+// arrangement in which the two sides' entry numbers stop meaning the same
+// thing, and nothing should be able to configure it.
+func TestFollowingIsReadFromTheEnvironmentAndIsAlsoWhatMakesAServerReadOnly(t *testing.T) {
+	leader := "sapedb://acme:a-password-of-the-right-shape@leader.internal:7500/main?sig=abc123"
+
+	config, err := FromEnv(env(map[string]string{
+		"SAPEDB_SECRET":          secret,
+		"SAPEDB_DIR":             t.TempDir(),
+		"SAPEDB_ADDR":            "127.0.0.1:0",
+		"SAPEDB_INSECURE":        "1",
+		"SAPEDB_FOLLOW":          leader,
+		"SAPEDB_FOLLOW_INSECURE": "1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Following {
+		t.Fatal("SAPEDB_FOLLOW was set and this daemon is not a follower")
+	}
+	if !config.FollowInsecure {
+		t.Error("SAPEDB_FOLLOW_INSECURE was set and the leader would be dialled over TLS")
+	}
+	if config.Follow.Host != "leader.internal" || config.Follow.Port != 7500 ||
+		config.Follow.Account != "acme" || config.Follow.DBName != "main" {
+		t.Errorf("the leader was read as %+v", config.Follow)
+	}
+
+	// The control: without it, everything above could be a Config that ignores
+	// the two variables and happens to look right.
+	alone, err := FromEnv(env(map[string]string{
+		"SAPEDB_SECRET": secret, "SAPEDB_DIR": t.TempDir(),
+		"SAPEDB_ADDR": "127.0.0.1:0", "SAPEDB_INSECURE": "1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alone.Following {
+		t.Error("a daemon with no SAPEDB_FOLLOW calls itself a follower")
+	}
+
+	// A string that is not one stops the daemon here, and names the field at
+	// fault rather than saying "invalid": these are secrets, and whoever is
+	// fixing one cannot print it to look.
+	if _, err := FromEnv(env(map[string]string{
+		"SAPEDB_SECRET": secret, "SAPEDB_INSECURE": "1",
+		"SAPEDB_FOLLOW": "sapedb://acme@leader.internal/main",
+	})); err == nil {
+		t.Error("a connection string with no password and no signature was accepted")
+	} else if !strings.Contains(err.Error(), "SAPEDB_FOLLOW") {
+		t.Errorf("the refusal does not say which variable is wrong: %v", err)
+	}
+
+	// And the switch itself. Start is what builds the server, so this is the
+	// only place the two can be shown to be one decision.
+	following, err := Start(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer following.Close()
+	if !following.Server().IsReadOnly() {
+		t.Error("a follower's server takes writes, so its log would stop being the leader's")
+	}
+
+	serving, err := Start(alone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serving.Close()
+	if serving.Server().IsReadOnly() {
+		t.Error("a server that follows nothing refuses writes")
+	}
+}

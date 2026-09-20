@@ -233,12 +233,34 @@ func seedTheCollection(t *testing.T, dir string) string {
 // the address it announced.
 func startDaemon(t *testing.T, dir string) (*exec.Cmd, string) {
 	t.Helper()
+	return runDaemon(t, buildDaemon(t), dir, nil, nil)
+}
+
+// buildDaemon builds cmd/sapedbd once and hands back the binary.
+//
+// Separate from running it so that a test which stops a daemon and starts it
+// again on the same directory — which is what following is about — pays for
+// the build once rather than once per start.
+func buildDaemon(t *testing.T) string {
+	t.Helper()
 
 	binary := filepath.Join(t.TempDir(), "sapedbd")
 	build := exec.Command(goTool(t), "build", "-o", binary, "./cmd/sapedbd")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building cmd/sapedbd: %v\n%s", err, out)
 	}
+	return binary
+}
+
+// runDaemon starts a built sapedbd on dir with `extra` added to its
+// environment, and returns the process and the address it announced.
+//
+// `heard`, when it is not nil, is called with every line the daemon prints.
+// A daemon says things worth measuring — which entry a follower resumed from,
+// most of all — and a test that could only see the address was a test that had
+// to infer the rest.
+func runDaemon(t *testing.T, binary, dir string, extra []string, heard func(string)) (*exec.Cmd, string) {
+	t.Helper()
 
 	daemon := exec.Command(binary)
 	daemon.Env = append(os.Environ(),
@@ -247,6 +269,7 @@ func startDaemon(t *testing.T, dir string) (*exec.Cmd, string) {
 		"SAPEDB_ADDR=127.0.0.1:0",
 		"SAPEDB_INSECURE=1",
 	)
+	daemon.Env = append(daemon.Env, extra...)
 	stdout, err := daemon.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -267,6 +290,9 @@ func startDaemon(t *testing.T, dir string) (*exec.Cmd, string) {
 	for lines.Scan() {
 		line := lines.Text()
 		t.Logf("sapedbd: %s", line)
+		if heard != nil {
+			heard(line)
+		}
 		_, after, found := strings.Cut(line, "listening on ")
 		if !found {
 			continue
@@ -277,8 +303,18 @@ func startDaemon(t *testing.T, dir string) (*exec.Cmd, string) {
 	if address == "" {
 		t.Fatal("sapedbd never announced an address, so nothing below could have connected to it")
 	}
-	// Keep draining, or a chatty daemon blocks on a full pipe mid-test.
-	go func() { _, _ = io.Copy(io.Discard, stdout) }()
+	// Keep draining, or a chatty daemon blocks on a full pipe mid-test. Not
+	// through t.Logf: this outlives the test — the daemon is killed in a
+	// cleanup — and logging from a goroutine after a test has finished is a
+	// panic, which would turn every green run into a flake.
+	go func() {
+		for lines.Scan() {
+			if heard != nil {
+				heard(lines.Text())
+			}
+		}
+		_, _ = io.Copy(io.Discard, stdout)
+	}()
 
 	return daemon, address
 }

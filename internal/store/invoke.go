@@ -256,7 +256,17 @@ func (s *Store) run(collection *Collection, operation Operation, within Range, r
 
 // writes says whether an action changes anything, which decides whether a
 // write id means something for it.
-func writes(action string) bool {
+func writes(action string) bool { return Writes(action) }
+
+// Writes says whether an action changes the database.
+//
+// It is exported so that a caller deciding whether to let an operation run at
+// all — a server holding a follower, which may not write — asks the same
+// question, of the same list, that SharedRead asks when it decides between the
+// read lock and the write lock. A second list kept somewhere else is a list
+// that will one day disagree with this one, and the day it does, the caller
+// that trusted it lets a write through.
+func Writes(action string) bool {
 	switch action {
 	case ActionInsert, ActionPut, ActionUpdate, ActionDelete, ActionBatch:
 		return true

@@ -64,6 +64,12 @@ type Options struct {
 	// can read every database it serves, by construction.
 	Encrypt bool
 
+	// ReadOnly refuses every request that would put an entry in the change
+	// log, which is what a follower is. Server.Apply is not refused: that is
+	// how the changes being followed get in. See follower.go for what counts
+	// as a write here and why the list is wider than it looks.
+	ReadOnly bool
+
 	// ProductVersion is what this build calls itself in the welcome. Empty
 	// means build.Version, which is what every real server wants: the value
 	// the linker stamped into this binary. It is a field rather than a
@@ -751,6 +757,18 @@ func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
 		db.mutex.RUnlock()
 		return nil, err
 	}
+	// Asked of the operation that was looked up, not of the request: a caller
+	// names an operation, and whether that operation writes is something only
+	// the declaration knows. store.Writes is the same list SharedRead just
+	// used to answer the lock question, so there is one answer to "does this
+	// write", not two that can drift. A read is not refused here, because a
+	// read records nothing — see follower.go.
+	if store.Writes(operation.Action) {
+		if err := s.readOnly(fmt.Sprintf("%q is declared to %s", operation.Name, operation.Action)); err != nil {
+			db.mutex.RUnlock()
+			return nil, err
+		}
+	}
 	if shared {
 		result, err := db.store.Run(caller, operation, asked.Arguments)
 		db.mutex.RUnlock()
@@ -1111,6 +1129,7 @@ func codeFor(err error) string {
 		{ErrName, "name"},
 		{ErrClosed, "closed"},
 		{ErrTooFarBehind, "too_far_behind"},
+		{ErrReadOnly, "read_only"},
 		{store.ErrNoOperation, "no_operation"},
 		{store.ErrArgument, "argument"},
 		{store.ErrNotAllowed, "not_allowed"},

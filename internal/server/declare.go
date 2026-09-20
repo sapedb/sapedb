@@ -69,6 +69,12 @@ func (s *Server) declare(live *session, payload []byte) ([]byte, error) {
 	if !live.operator {
 		return nil, ErrNotOperator
 	}
+	// Before the payload is even read: a declaration is an entry in the log,
+	// and a follower mints none. Refused for an operator too — holding the
+	// server's secret says what you may do, not what this database is.
+	if err := s.readOnly("declaring an operation writes to the change log"); err != nil {
+		return nil, err
+	}
 
 	asked := declaring{}
 	if err := json.Unmarshal(payload, &asked); err != nil {

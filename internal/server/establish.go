@@ -79,6 +79,11 @@ func (s *Server) establish(live *session, payload []byte) ([]byte, error) {
 	if !live.operator {
 		return nil, ErrNotOperator
 	}
+	// As in declare: a collection declared here is an entry in the log, and a
+	// follower installs the leader's entries rather than making its own.
+	if err := s.readOnly("establishing a collection writes to the change log"); err != nil {
+		return nil, err
+	}
 
 	asked := establishing{}
 	if err := json.Unmarshal(payload, &asked); err != nil {

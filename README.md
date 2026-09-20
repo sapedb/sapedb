@@ -171,6 +171,32 @@ The server refuses to start without TLS unless `SAPEDB_INSECURE=1` says you mean
 it. The Docker image ships the server binary and nothing else — no shell, no
 package manager, no libc.
 
+### Following another server
+
+    export SAPEDB_FOLLOW='sapedb://acme:...@leader:7433/main?sig=...'
+    sapedbd
+
+A daemon started like this keeps a copy of that database: it subscribes to its
+change log from wherever its own copy has got to, applies every entry, and
+**refuses every write of its own** — `read_only`, with the reason in the
+message. The same connection string reaches both, because a signature covers
+the account, the password and the database name and deliberately not the host.
+`SAPEDB_FOLLOW_INSECURE=1` dials the leader without TLS.
+
+A follower keeps no place of its own — no cursor file, nothing beside the data.
+Applying an entry writes the log counter in the same transaction as the change
+itself, so where to resume is the database's own latest entry, plus one, and
+there is no moment at which the two could disagree.
+
+Refusing writes is wider than it sounds and the surprise is worth knowing
+before you point a tool at one: reading the catalogue and the operator shell
+both record an entry in the change log, so **both are refused on a follower**.
+Invoking a declared operation that only reads is not.
+
+Replication is asynchronous, a follower never promotes itself, nothing measures
+lag, and a daemon follows one database rather than a list. None of those is
+built.
+
 To watch the example end to end:
 
     SAPEDB_SERVER_BIN=./sapedbd SAPEDB_CLI_BIN=./sapedb node examples/ledger/run.mjs

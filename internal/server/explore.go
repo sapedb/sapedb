@@ -80,6 +80,14 @@ func (s *Server) explore(live *session, payload []byte) ([]byte, error) {
 	if !live.operator {
 		return nil, ErrNotOperator
 	}
+	// Both halves of this handler record a ChangeRead entry — store.Explore
+	// after the rows, store.WhatIsHere after the catalogue — so on a follower
+	// both are writes, however much they read like reads. Refusing them costs
+	// a follower its operator shell, which is a real loss said out loud in
+	// CHANGELOG rather than hidden behind a handler that looks harmless.
+	if err := s.readOnly("looking around is recorded in the change log, and a follower writes no entries of its own"); err != nil {
+		return nil, err
+	}
 
 	asked := exploring{}
 	if err := json.Unmarshal(payload, &asked); err != nil {

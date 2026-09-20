@@ -13,6 +13,14 @@
 //	SAPEDB_LABEL      signing label, if not the default
 //	SAPEDB_SHUTDOWN   how long to let connections finish    (default 20s)
 //
+//	SAPEDB_FOLLOW            a connection string to keep a copy of
+//	SAPEDB_FOLLOW_INSECURE   1 to dial that leader without TLS
+//
+// SAPEDB_FOLLOW makes this daemon a follower: it subscribes to that database's
+// change log from wherever its own copy has got to, applies what arrives, and
+// refuses every write of its own — including reading the catalogue and the
+// operator shell, both of which record an entry. See internal/follow.
+//
 // There is no logic here on purpose. What this command decides is decided in
 // internal/service, where it can be tested without starting a process.
 package main

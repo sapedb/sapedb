@@ -131,6 +131,104 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **`sapedbd` can follow another `sapedbd`.** Set `SAPEDB_FOLLOW` to the
+  connection string of a database on another server and this daemon keeps a
+  copy of it: it subscribes to that database's change log from wherever its
+  own copy has got to, applies every entry as it arrives, and refuses every
+  write of its own. `SAPEDB_FOLLOW_INSECURE=1` dials the leader without TLS,
+  separately from `SAPEDB_INSECURE`, which is about how this daemon is
+  reached. The account and database name come out of the connection string:
+  a copy of `acme/main` is served here as `acme/main`.
+
+  One connection string reaches both. The signature covers the account, the
+  password and the database name and deliberately not the host, so the same
+  string a caller uses against the leader reads from the follower.
+
+  **Where a follower keeps its place: nowhere of its own.** There is no
+  cursor file and no marker key beside the data, because two things that must
+  agree and are written separately are two things that will one day disagree
+  — and the two ways they disagree are the two ways replication goes quietly
+  wrong. Applying an entry already writes the log counter (`store.Apply`
+  calls `setLSN`, into the same tree, inside the same transaction as the
+  document it changed), and one commit makes the change and the number
+  durable together or neither of them. So the place a follower resumes from
+  is the database's own `LatestLSN`, plus one.
+
+  That removes both halves of the trap rather than balancing them. Crash
+  after applying and before saving the position: impossible, they are one
+  write. Crash after saving and before applying: impossible, same reason.
+  Reconnect and be sent entries already held: `store.Apply` ignores an entry
+  at or below what is there.
+
+  Measured on two real `sapedbd` processes
+  (`TestAFollowerKilledMidStreamComesBackWithoutAGapOrARepeat`): 602 entries
+  on the leader, the follower killed at entry 200 of them, 40 more writes
+  while it was down, then the same directory started again. It announced
+  `from entry 201`, caught up, and its log was compared to the leader's
+  **entry by entry** — every entry present, identical, and the numbering
+  contiguous — with the documents then compared field by field on top of
+  that.
+
+  What that measurement is worth was checked by breaking it four ways, each
+  in a copy of the tree. A follower that resumes one entry too far never
+  applies anything (`store.Apply` refuses the out-of-order entry) and the
+  test times out; one that resumes from entry 1 every time is caught by the
+  line it announces; one that drops an entry — with `store.Apply`'s ordering
+  guard removed as well, or nothing would have let it — is caught by name:
+  `entry 300 is on the leader and not on the follower`; and a follower
+  without the write gate is caught accepting a write.
+
+  Two other mutants were **equivalent**, which is worth writing down because
+  each looks like a defect and is not. Applying every entry twice changes
+  nothing: every arm of `store.Apply` is idempotent, which is what the log's
+  own comment has always claimed ("applying one twice is the same as applying
+  it once"). And making `Apply` record a change of its own on the put arm
+  also changes nothing here, because the number it mints is the number the
+  entry already had — `takeLSN` returns `latest+1`, which is exactly the
+  entry being applied — and `Apply` overwrites the log entry with the
+  leader's verbatim afterwards. Neither is a reason to relax either guard;
+  they are the reasons "a repeat" is not a failure this can produce.
+
+- **A server can be read-only, and a follower is one.** `server.Options.ReadOnly`
+  refuses every request that would put an entry in the change log, with a
+  sentinel of its own (`server.ErrReadOnly`) and a code of its own
+  (`read_only`), because the caller's answer to it is specific: go and write
+  to the leader.
+
+  **What counts as a write is wider than it looks**, and this is the part to
+  read before pointing a tool at a follower. Reading the catalogue
+  (`WhatIsHere`) and running an operator's typed access (`Explore`) both
+  record a `ChangeRead` entry — deliberately, so that an audit trail does not
+  stop at the primary — and an entry is an entry. **Both are refused on a
+  follower**, which costs a follower its operator shell: `sapedb shell`
+  against one cannot so much as list the collections. Invoking a declared
+  operation that only reads is not refused, because it records nothing, and
+  that is how anything reads a follower today.
+
+  A write accepted on a follower would be worse than a write lost. It would
+  mint an entry number of its own, and from that moment the two sides'
+  numbers mean different things: the next entry the leader sends is refused
+  as out of order and the copy stops following. So being a follower and
+  refusing writes are one switch rather than two, set together in
+  `internal/service`.
+
+  **Out of scope, and none of it is an oversight.** Replication is
+  asynchronous: the leader does not wait for a follower and does not know
+  whether one is keeping up. A follower never promotes itself. Nothing
+  merges, because a follower takes no writes and there is no conflict to
+  resolve. Nothing measures lag. Several followers of one leader do not know
+  about each other. A daemon follows one database, not a list.
+
+  **Known debt.** A follower commits once per entry it applies, so a batch
+  of 512 entries off the leader's feed is 512 commits and 512 syncs here.
+  Nothing has needed it to be faster yet. And `too_far_behind` — a follower
+  away longer than the leader keeps its log — is handled (`follow.Run`
+  returns rather than reconnecting into a refusal for ever) but **cannot be
+  produced against `sapedbd` at all today**, because no server option
+  reaches `store.Retain` and so a daemon's log is never trimmed. That path is
+  covered only by the in-process test that sets the cap itself
+  (`TestASubscriptionFromAnEntryThatWasTrimmedIsRefused`).
+
 - **A client can read the change feed.** `Client.Subscribe(from)` and
   `Client.NextChange()`, on `internal/wire` and on the public `sapedb`
   surface, with `Change`, `Attribution` and `Following` alongside them.

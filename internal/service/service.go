@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/sapedb/sapedb/internal/build"
+	"github.com/sapedb/sapedb/internal/connection"
+	"github.com/sapedb/sapedb/internal/follow"
 	"github.com/sapedb/sapedb/internal/server"
 	"github.com/sapedb/sapedb/internal/signing"
 )
@@ -55,6 +57,26 @@ type Config struct {
 	Encrypt bool
 	// Shutdown is how long to let connections finish after a signal.
 	Shutdown time.Duration
+
+	// Follow is the connection string of a database this daemon keeps a copy
+	// of. Set, this daemon is a follower: it subscribes to that database's
+	// change log from wherever its own copy has got to, applies what arrives,
+	// and refuses every write of its own. The account and database name come
+	// out of the string — a copy of acme/main is served here as acme/main.
+	//
+	// It is one string rather than a list because following one database is
+	// what has been measured. A daemon that followed several would need to
+	// decide what it does when one of them is unreachable and the others are
+	// not, and that is a decision, not a loop.
+	Follow connection.Connection
+	// Following says whether Follow was set, because a zero Connection is a
+	// valid-looking struct and "is this a follower" must not be a guess about
+	// empty strings.
+	Following bool
+	// FollowInsecure dials the leader without TLS. Separate from Insecure,
+	// which is about how this daemon is reached: a daemon can be served over
+	// TLS and follow a leader on a private network, or the other way round.
+	FollowInsecure bool
 }
 
 // FromEnv reads the configuration. `lookup` is os.LookupEnv in a real process.
@@ -97,6 +119,20 @@ func FromEnv(lookup func(string) (string, bool)) (Config, error) {
 		config.Shutdown = parsed
 	}
 
+	if leader := get("SAPEDB_FOLLOW", ""); leader != "" {
+		// Parsed here rather than when the follower starts, so that a string
+		// with a typo in it stops the daemon at startup — where somebody is
+		// watching — instead of at the first reconnection attempt, in a log.
+		// connection.Parse names the field at fault, which matters for a value
+		// nobody can print: it is a secret.
+		parsed, err := connection.Parse(leader)
+		if err != nil {
+			return Config{}, fmt.Errorf("SAPEDB_FOLLOW: %w", err)
+		}
+		config.Follow, config.Following = parsed, true
+		config.FollowInsecure = flag("SAPEDB_FOLLOW_INSECURE")
+	}
+
 	return config, config.check()
 }
 
@@ -132,6 +168,12 @@ func Start(config Config) (*Service, error) {
 
 	made, err := server.New(server.Options{
 		Dir: config.Dir, Secret: config.Secret, Label: config.Label, Encrypt: config.Encrypt,
+		// A follower refuses writes, and that is the same decision as being a
+		// follower rather than a second switch beside it. Two switches would
+		// mean a configuration in which this daemon applies somebody else's
+		// log and takes writes of its own, which is the one arrangement whose
+		// entry numbers stop meaning the same thing on the two sides.
+		ReadOnly: config.Following,
 	})
 	if err != nil {
 		return nil, err
@@ -195,6 +237,40 @@ func (s *Service) Serve(ctx context.Context, announce io.Writer) error {
 		// also the one line that is kept when a log is pasted into a report.
 		fmt.Fprintf(announce, "sapedb %s listening on %s as %s, databases in %s\n",
 			build.Version, s.Address(), scheme, s.config.Dir)
+		if s.config.Following {
+			// Said on the line after the address, because "which of these is
+			// the leader" is the first question anybody debugging two daemons
+			// asks, and the answer must not be something they have to infer
+			// from a write being refused. Redacted: the string holds a
+			// password and a signature.
+			fmt.Fprintf(announce, "sapedb following %s, and taking no writes of its own\n",
+				s.config.Follow.Redact())
+		}
+	}
+
+	// Started before Serve, so that a follower catches up whether or not
+	// anybody connects to it. Stopped by the same context that stops serving.
+	if s.config.Following {
+		following, stopFollowing := context.WithCancel(ctx)
+		defer stopFollowing()
+		go func() {
+			err := follow.Run(following, follow.Options{
+				Leader: s.config.Follow, Into: s.server, Insecure: s.config.FollowInsecure,
+				Notice: func(line string) {
+					if announce != nil {
+						fmt.Fprintf(announce, "sapedb: %s\n", line)
+					}
+				},
+			})
+			// Only what retrying cannot fix reaches here. It is said and the
+			// daemon keeps serving what it already has: a follower that has
+			// fallen off the end of the leader's log still holds a database
+			// somebody may be reading, and killing the process would take that
+			// away as well.
+			if err != nil && announce != nil {
+				fmt.Fprintf(announce, "sapedb: %v\n", err)
+			}
+		}()
 	}
 
 	done := make(chan error, 1)
