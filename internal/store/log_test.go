@@ -34,7 +34,7 @@ func TestEveryChangeIsInTheLogInOrder(t *testing.T) {
 	_, store := fresh(t, 40)
 	store.Clock(func() time.Time { return time.UnixMilli(1700000000000) })
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +170,11 @@ func TestAWriteThatArrivesTwiceIsAppliedOnce(t *testing.T) {
 // entries ends up holding exactly the same thing.
 func TestAReplicaFedTheLogEndsUpTheSame(t *testing.T) {
 	_, primary := fresh(t, 43)
-	collection, err := primary.Declare(articles())
+	collection, err := primary.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := primary.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
+	if _, err := primary.Declare(Caller{}, Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
 		t.Fatal(err)
 	}
 	notes, _ := primary.Collection("notes")
@@ -204,11 +204,11 @@ func TestAReplicaFedTheLogEndsUpTheSame(t *testing.T) {
 		Name:   "by_title",
 		Fields: []Field{{Path: "title", Type: TypeString, Missing: MissingSkip}},
 	})
-	if _, err := primary.Declare(extra); err != nil {
+	if _, err := primary.Declare(Caller{}, extra); err != nil {
 		t.Fatal(err)
 	}
 	put(t, collection, map[string]any{"id": "last", "title": "After the index"})
-	if err := primary.Drop("notes"); err != nil {
+	if err := primary.Drop(Caller{}, "notes"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -322,7 +322,7 @@ func TestOperationsTravelDownTheLogToo(t *testing.T) {
 
 func TestTheLogIsTrimmedToWhatWasAskedFor(t *testing.T) {
 	_, store := fresh(t, 47)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestTheLogIsTrimmedToWhatWasAskedFor(t *testing.T) {
 
 func TestTheLogSurvivesARestart(t *testing.T) {
 	disk, store := fresh(t, 49)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}

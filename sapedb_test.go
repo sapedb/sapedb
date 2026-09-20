@@ -16,7 +16,7 @@ import (
 	"github.com/sapedb/sapedb/internal/store"
 )
 
-// TestTheSurfaceIsExactlyTheseThirtyThreeNames fails when a name is added to this
+// TestTheSurfaceIsExactlyTheseThirtyFourNames fails when a name is added to this
 // package, removed from it, or renamed. It is not a style rule: every name
 // here is a promise this project cannot take back without breaking somebody's
 // build, so adding one has to be a decision somebody made on purpose, not a
@@ -34,14 +34,18 @@ import (
 // which live in Client's own namespace and so can reuse a package-scope name
 // (Welcome the type alias, Welcome the method) without collision. Task 0068
 // §1.5 counts both: 20 aliases + Parse + Dial + Client + Explored = 24
-// package-scope names, plus 9 methods on Client = 33. It was 30 until Declare
+// package-scope names, plus 10 methods on Client = 34. It was 30 until Declare
 // — the frame that lets an operation be declared on a server that is already
 // running — and then InvokeVersion, which is how a caller reaches the older
 // versions a redeclaration leaves behind, each gave Client a method. The
 // thirty-third is Present: an operation may declare scopes, and until it
 // existed nothing in this package could present one, so such an operation was
-// one no caller of this client could ever run.
-func TestTheSurfaceIsExactlyTheseThirtyThreeNames(t *testing.T) {
+// one no caller of this client could ever run. The thirty-fourth is Establish,
+// the other half of Declare: an operation could be declared on a running
+// server and a collection could not, so a module that arrives with its own
+// collection, indexes and rollups could not be installed into an empty
+// database over a connection at all.
+func TestTheSurfaceIsExactlyTheseThirtyFourNames(t *testing.T) {
 	wantPackageScope := []string{
 		// The 20 value-type aliases.
 		"Access", "Bound", "Catalogue", "Condition", "Endpoint", "Field",
@@ -54,12 +58,12 @@ func TestTheSurfaceIsExactlyTheseThirtyThreeNames(t *testing.T) {
 		"Client", "Explored",
 	}
 	wantClientMethods := []string{
-		"Welcome", "Operate", "Explore", "WhatIsHere", "Declare",
+		"Welcome", "Operate", "Explore", "WhatIsHere", "Declare", "Establish",
 		"Present", "Invoke", "InvokeVersion", "Close",
 	}
 
-	if got, want := len(wantPackageScope)+len(wantClientMethods), 33; got != want {
-		t.Fatalf("this test's own want-lists total %d names, not 33 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
+	if got, want := len(wantPackageScope)+len(wantClientMethods), 34; got != want {
+		t.Fatalf("this test's own want-lists total %d names, not 34 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
 	}
 
 	gotPackageScope, gotMethods := readSurface(t)
@@ -67,7 +71,7 @@ func TestTheSurfaceIsExactlyTheseThirtyThreeNames(t *testing.T) {
 	compareNames(t, "package-scope name", gotPackageScope, wantPackageScope)
 
 	if types := methodReceiverTypes(gotMethods); len(types) > 1 || (len(types) == 1 && types[0] != "Client") {
-		t.Fatalf("exported methods exist on a type other than Client, which the 32-name surface does not account for: %v", types)
+		t.Fatalf("exported methods exist on a type other than Client, which the 34-name surface does not account for: %v", types)
 	}
 	compareNames(t, "Client method", gotMethods["Client"], wantClientMethods)
 }
@@ -246,7 +250,7 @@ func TestClientWrapperForwardsWithoutDroppingFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "articles",
 		Key:  store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
 		Indexes: []store.Index{{

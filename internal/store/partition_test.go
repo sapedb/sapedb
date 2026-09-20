@@ -21,7 +21,7 @@ func atMonth(t *testing.T, store *Store, when time.Time) {
 func entriesByMonth(t *testing.T, store *Store, keep int) *Collection {
 	t.Helper()
 
-	made, err := store.Declare(Spec{
+	made, err := store.Declare(Caller{}, Spec{
 		Name:      "entries",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth, Keep: keep},
@@ -227,7 +227,7 @@ func TestWhatMayBeDeclaredOnAPartitionedCollection(t *testing.T) {
 	_, _, store := partitioned(t, 304)
 
 	// A time partition needs a ulid key, because that is what carries the time.
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name: "bad", Key: Key{Path: "id", Type: TypeString},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},
 	}); !errors.Is(err, ErrDeclaration) {
@@ -244,7 +244,7 @@ func TestWhatMayBeDeclaredOnAPartitionedCollection(t *testing.T) {
 		{By: ByHash, Into: 4, Keep: 2},
 		{By: "size", Into: 4},
 	} {
-		if _, err := store.Declare(Spec{
+		if _, err := store.Declare(Caller{}, Spec{
 			Name: "bad", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}, Partition: wrong,
 		}); !errors.Is(err, ErrDeclaration) {
 			t.Errorf("%+v was accepted: %v", wrong, err)
@@ -295,7 +295,7 @@ func TestWhatMayBeDeclaredOnAPartitionedCollection(t *testing.T) {
 func TestAHashPartitionedCollectionIsReadByKey(t *testing.T) {
 	_, _, store := partitioned(t, 305)
 
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name:      "sessions",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByHash, Into: 4},
@@ -349,7 +349,7 @@ func TestHowACollectionIsDividedIsNotRedeclared(t *testing.T) {
 		{By: ByTime, Every: EveryDay},
 		{By: ByHash, Into: 4},
 	} {
-		if _, err := store.Declare(Spec{
+		if _, err := store.Declare(Caller{}, Spec{
 			Name:      "entries",
 			Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 			Partition: changed,

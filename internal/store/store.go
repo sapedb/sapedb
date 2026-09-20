@@ -141,7 +141,24 @@ func (s *Store) load() error {
 // dropped, and their entries go with them. An index that keeps its name but
 // changes its shape is refused — that is two different indexes, and silently
 // replacing one with the other would leave every reader of the old one wrong.
-func (s *Store) Declare(spec Spec) (*Collection, error) {
+//
+// Declaring a name that already exists is NOT a new version. An operation is
+// versioned because callers are built against one and a redeclaration must
+// not move the ground under them; a collection is where the documents
+// physically are, and there is only one of those. So this brings the one that
+// exists up to date, in place, and refuses the changes that cannot be made in
+// place rather than making a second collection nobody asked for.
+//
+// caller is what the change log records against the entry. Both entries this
+// writes — the first declaration and the redeclaration — went in with nobody's
+// name on them until this parameter existed, which made the log unable to
+// answer the one question an audit asks of a schema change: who. What the name
+// is worth differs by path and neither path pretends otherwise: over the wire
+// it is the account whose connection the server itself verified, through
+// `sapedb apply` it is the account the command was pointed at, which is a
+// label rather than a proof. An embedder calling this directly passes
+// Caller{} and the entry says so, rather than inheriting a name from nowhere.
+func (s *Store) Declare(caller Caller, spec Spec) (*Collection, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
@@ -165,7 +182,10 @@ func (s *Store) Declare(spec Spec) (*Collection, error) {
 		if err := s.install(spec); err != nil {
 			return nil, err
 		}
-		if _, err := s.record(Change{Kind: ChangeDeclare, Collection: spec.Name, Spec: &spec}); err != nil {
+		if _, err := s.record(Change{
+			Kind: ChangeDeclare, Collection: spec.Name, Spec: &spec,
+			By: Attribution{Operation: "declare", Actor: caller.Actor},
+		}); err != nil {
 			return nil, err
 		}
 		return s.collections[spec.Name], nil
@@ -253,7 +273,10 @@ func (s *Store) Declare(spec Spec) (*Collection, error) {
 	if err := s.install(updated); err != nil {
 		return nil, err
 	}
-	if _, err := s.record(Change{Kind: ChangeDeclare, Collection: updated.Name, Spec: &updated}); err != nil {
+	if _, err := s.record(Change{
+		Kind: ChangeDeclare, Collection: updated.Name, Spec: &updated,
+		By: Attribution{Operation: "declare", Actor: caller.Actor},
+	}); err != nil {
 		return nil, err
 	}
 	return s.collections[updated.Name], nil
@@ -335,9 +358,15 @@ func (s *Store) Collections() []string {
 
 // Drop removes a collection: its documents, its index entries and its
 // declaration.
-func (s *Store) Drop(name string) error { return s.drop(name, true) }
+//
+// caller is recorded with the entry, for the same reason Declare's is and
+// with more urgency: a declaration can be read back off the collection that
+// now exists, while a drop leaves nothing behind to ask. An entry saying a
+// collection was destroyed and not saying by whom is the one entry in this log
+// where the missing half mattered most.
+func (s *Store) Drop(caller Caller, name string) error { return s.drop(caller, name, true) }
 
-func (s *Store) drop(name string, record bool) error {
+func (s *Store) drop(caller Caller, name string, record bool) error {
 	collection, err := s.Collection(name)
 	if err != nil {
 		return err
@@ -358,7 +387,10 @@ func (s *Store) drop(name string, record bool) error {
 	delete(s.collections, name)
 
 	if record {
-		if _, err := s.record(Change{Kind: ChangeDrop, Collection: name}); err != nil {
+		if _, err := s.record(Change{
+			Kind: ChangeDrop, Collection: name,
+			By: Attribution{Operation: "drop", Actor: caller.Actor},
+		}); err != nil {
 			return err
 		}
 	}

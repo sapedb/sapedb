@@ -27,7 +27,7 @@ func TestABackwardsRangeIsNeverSilentlyEmpty(t *testing.T) {
 	// widgets carries a plain ascending number field, kept separate from
 	// by_author's Descending "published" so the numeric row below is
 	// unambiguous about which way is "backwards".
-	widgets, err := store.Declare(Spec{
+	widgets, err := store.Declare(Caller{}, Spec{
 		Name: "widgets",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{

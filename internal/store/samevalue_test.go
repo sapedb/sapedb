@@ -465,7 +465,7 @@ func TestSameValueRequiresEveryMapKeyToBePresentNotJustCounted(t *testing.T) {
 // second thing that could be declared wrong.
 func widgetsForConditions(t *testing.T, store *Store) *Collection {
 	t.Helper()
-	collection, err := store.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+	collection, err := store.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 	if err != nil {
 		t.Fatalf("declare widgets: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestAConditionSourcedFromAnEarlierStepIsAlwaysAKeyNeverAnArrayOrObject(t *t
 	_, store := fresh(t, 522)
 
 	for _, badType := range []string{TypeBool, TypeAny, "array", "object"} {
-		_, err := store.Declare(Spec{Name: "rejected_" + badType, Key: Key{Path: "id", Type: badType}})
+		_, err := store.Declare(Caller{}, Spec{Name: "rejected_" + badType, Key: Key{Path: "id", Type: badType}})
 		if !errors.Is(err, ErrDeclaration) {
 			t.Errorf("a collection keyed on %q should be refused with ErrDeclaration (spec.go:137), got %v", badType, err)
 		}
@@ -651,7 +651,7 @@ func TestAConditionSourcedFromAnEarlierStepIsAlwaysAKeyNeverAnArrayOrObject(t *t
 		{Name: "tickets", Key: Key{Path: "id", Type: TypeString}},
 		{Name: "assignments", Key: Key{Path: "id", Type: TypeString}},
 	} {
-		if _, err := store.Declare(spec); err != nil {
+		if _, err := store.Declare(Caller{}, spec); err != nil {
 			t.Fatalf("declare %q: %v", spec.Name, err)
 		}
 	}
@@ -831,7 +831,7 @@ func TestNumbersAreFloat64OnEveryPathThatFeedsSameValue(t *testing.T) {
 	// this subtest belongs to the test; the one that runs belongs to ops.go.
 	t.Run("declaration path, through ops.go's own decode via store.Operation", func(t *testing.T) {
 		_, store := fresh(t, 524)
-		if _, err := store.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}}); err != nil {
+		if _, err := store.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}}); err != nil {
 			t.Fatal(err)
 		}
 		yes := true
@@ -881,7 +881,7 @@ func TestNumbersAreFloat64OnEveryPathThatFeedsSameValue(t *testing.T) {
 	// path's json.Unmarshal (collection.go).
 	t.Run("document path, through collection.go's own Put/Get round trip", func(t *testing.T) {
 		_, store := fresh(t, 523)
-		widgets, err := store.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+		widgets, err := store.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 		if err != nil {
 			t.Fatal(err)
 		}

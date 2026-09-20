@@ -119,6 +119,26 @@ func (c *Client) Declare(operation Operation) (Operation, error) {
 	return c.inner.Declare(operation)
 }
 
+// Establish declares a collection on this connection's database, without the
+// server being stopped for it.
+//
+// Only an operator may: call Operate first, as for Declare. It is the other
+// half of Declare and it arrived late, which is why the two do not match: an
+// operation declared over a name that exists gets a new version and the old
+// ones stay runnable, while a collection has no version to give — it is where
+// the documents physically are. So establishing a name that already exists
+// brings that collection up to date in place: indexes and rollups it names are
+// added (built over the documents already stored) or kept, ones it leaves out
+// are dropped with their entries, and what cannot be changed in place — the
+// primary key, how the collection is divided, an index that keeps its name and
+// changes its shape — is refused rather than done quietly.
+//
+// The Spec handed back is what actually took effect, read off the collection
+// rather than echoed, carrying the ids the store assigned.
+func (c *Client) Establish(spec Spec) (Spec, error) {
+	return c.inner.Establish(spec)
+}
+
 // Present attaches a scope grant to this connection, sent with every Invoke
 // from here on.
 //

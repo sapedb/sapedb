@@ -12,7 +12,7 @@ import (
 func shelf(t *testing.T, store *Store) {
 	t.Helper()
 
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name: "books",
 		Key:  Key{Path: "id", Type: TypeString},
 		Indexes: []Index{{

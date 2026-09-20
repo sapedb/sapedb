@@ -55,12 +55,27 @@ const (
 	// Explore, it is refused on a connection that has not proved the
 	// server's own secret.
 	Declare Type = 13
+	// Establish stores a COLLECTION declaration — a Spec, with its key, its
+	// indexes and its rollups — on a database that is already being served.
+	// Declare did the same for an operation; until this frame existed the
+	// other half was still a reason to stop the server.
+	//
+	// It is a new code rather than a field added to Declare because frames 1
+	// to 13 do not change what they are. A Declare whose meaning depended on
+	// which of two fields was set would be exactly that change, dressed as an
+	// addition.
+	//
+	// The name is deliberately not "declare something": in internal/store,
+	// Declare is the collection one and DeclareOperation is the operation
+	// one, while frame 13 named Declare carries the operation. A third word
+	// keeps that crossed pair from being doubled on the wire.
+	Establish Type = 14
 )
 
 var typeNames = map[Type]string{
 	Hello: "hello", Welcome: "welcome", Ping: "ping", Pong: "pong", Invoke: "invoke",
 	Result: "result", Failure: "failure", Subscribe: "subscribe", Event: "event", Goodbye: "goodbye",
-	Elevate: "elevate", Explore: "explore", Declare: "declare",
+	Elevate: "elevate", Explore: "explore", Declare: "declare", Establish: "establish",
 }
 
 // String names a frame type, or reports the code when this version has no name

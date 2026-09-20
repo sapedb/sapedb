@@ -177,7 +177,7 @@ func TestArgDoorCyclicValueNoLongerCrashesThroughSatisfiesItReturnsErrCondition(
 		// it takes the *testing.T this child still has, since it is still
 		// the same test function, just past the fork.
 		_, s := fresh(t, 531)
-		widgets, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+		widgets, err := s.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 		if err != nil {
 			os.Stdout.WriteString("SETUP FAILED: " + err.Error() + "\n")
 			os.Exit(5)
@@ -275,7 +275,7 @@ func TestPutAndDeclareOperationBothRefuseACyclicValueBeforeItCanEverBeStored(t *
 	cycle := buildCycle()
 
 	_, store := fresh(t, 530)
-	widgets, err := store.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+	widgets, err := store.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 	if err != nil {
 		t.Fatal(err)
 	}

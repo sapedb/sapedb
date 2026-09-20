@@ -46,7 +46,7 @@ func TestDescribeOfANamedSelfReferentialSliceTypeReturnsABoundedStringInsteadOfC
 		}()
 
 		_, s := fresh(t, 832)
-		widgets, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+		widgets, err := s.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 		if err != nil {
 			os.Stdout.WriteString("SETUP FAILED: " + err.Error() + "\n")
 			os.Exit(5)

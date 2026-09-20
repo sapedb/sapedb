@@ -34,17 +34,17 @@ func keyedTwoWays(t *testing.T) *Store {
 	t.Helper()
 	_, s := fresh(t, 11)
 
-	if _, err := s.Declare(Spec{
+	if _, err := s.Declare(Caller{}, Spec{
 		Name: "orders", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 	}); err != nil {
 		t.Fatalf("declare orders: %v", err)
 	}
-	if _, err := s.Declare(Spec{
+	if _, err := s.Declare(Caller{}, Spec{
 		Name: "receipts", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 	}); err != nil {
 		t.Fatalf("declare receipts: %v", err)
 	}
-	if _, err := s.Declare(Spec{
+	if _, err := s.Declare(Caller{}, Spec{
 		Name: "lines", Key: Key{Path: "id", Type: TypeNumber},
 	}); err != nil {
 		t.Fatalf("declare lines: %v", err)

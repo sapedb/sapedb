@@ -18,7 +18,7 @@ import (
 func checkedRequire(t *testing.T, seed int64) (*Store, *Collection) {
 	t.Helper()
 	_, s := fresh(t, seed)
-	widgets, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
+	widgets, err := s.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}})
 	if err != nil {
 		t.Fatalf("declare widgets: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestADirectionArgumentThatIsASelfReferentialContainerIsRefusedNotFormatted(
 // would have formatted it.
 func TestAPrimaryKeyThatIsASelfReferentialContainerIsRefusedNotFormatted(t *testing.T) {
 	_, s := fresh(t, 605)
-	if _, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}}); err != nil {
+	if _, err := s.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}}); err != nil {
 		t.Fatalf("declare: %v", err)
 	}
 	if _, err := s.DeclareOperation(Caller{}, Operation{

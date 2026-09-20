@@ -27,7 +27,7 @@ func TestABackwardsRangeReachesTheWireAsArgumentOrDeclaration(t *testing.T) {
 	}
 	defer release()
 
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "people",
 		Key:  store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
 		Indexes: []store.Index{{

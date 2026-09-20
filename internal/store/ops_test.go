@@ -15,7 +15,7 @@ func declared(t *testing.T, seed int64) (*Store, *Collection) {
 	t.Helper()
 
 	_, store := fresh(t, seed)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestDeclaringAgainMakesAVersionRatherThanReplacing(t *testing.T) {
 
 func TestDeclarationsSurviveARestart(t *testing.T) {
 	disk, store := fresh(t, 30)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}

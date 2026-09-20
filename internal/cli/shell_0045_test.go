@@ -32,7 +32,7 @@ func TestAnOperatorWhoTypesTheEndsBackwardsSeesOneLineNotAGoError(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "books",
 		Key:  store.Key{Path: "id", Type: store.TypeString},
 		Indexes: []store.Index{{

@@ -197,7 +197,7 @@ func TestItServesOverTLSAndStopsWhenTold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "notes", Key: store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
 	}); err != nil {
 		t.Fatal(err)

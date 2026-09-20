@@ -317,7 +317,10 @@ func (s *Store) Apply(change Change) error {
 		}
 
 	case ChangeDrop:
-		if err := s.drop(change.Collection, false); err != nil && !errors.Is(err, ErrNoCollection) {
+		// Caller{} rather than the entry's own By: this arm records nothing
+		// (record is false), so the caller it is handed goes nowhere. A
+		// replica writes the primary's entry verbatim, it does not mint one.
+		if err := s.drop(Caller{}, change.Collection, false); err != nil && !errors.Is(err, ErrNoCollection) {
 			return err
 		}
 

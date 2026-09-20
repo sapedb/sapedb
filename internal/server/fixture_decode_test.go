@@ -59,6 +59,16 @@ func TestEveryRequestFixtureDecodesIntoTheStructThatServesIt(t *testing.T) {
 			}
 			return nil
 		},
+		protocol.Establish: func(d *json.Decoder) error {
+			asked := establishing{}
+			if err := d.Decode(&asked); err != nil {
+				return err
+			}
+			if asked.Spec.Name == "" {
+				return errEmpty("spec.name")
+			}
+			return nil
+		},
 	}
 
 	raw, err := os.ReadFile("../../fixtures/frames.json")

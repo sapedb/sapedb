@@ -191,7 +191,7 @@ func seedTheCollection(t *testing.T, dir string) string {
 		_ = srv.Close()
 		t.Fatal(err)
 	}
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "notes",
 		Key:  store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
 		Indexes: []store.Index{{
@@ -582,4 +582,205 @@ func TestAComposedOperationIsDeclaredOnARunningDaemonAndAnsweredInOneCall(t *tes
 	if err := daemon.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("the daemon is no longer running: %v", err)
 	}
+}
+
+// TestACollectionIsDeclaredOnARunningDaemonAndThenOperatedOnTheSameConnection
+// is the half the Declare frame left out, measured the same way: a real
+// sapedbd process, started once and never stopped.
+//
+// Declare could put an operation on a running server. It could not put a
+// collection there, so an operation declared over the wire could only ever
+// point at a collection somebody had already made by stopping the server and
+// running `sapedb apply`. That is what kept a module — an external operation
+// that solves a whole problem through the shapes it publishes, and therefore
+// arrives with its own collection, its own indexes and its own vocabulary —
+// from being installable into an empty database at all.
+//
+// So the daemon here starts on a database with NOTHING declared in it, and
+// everything below arrives over one socket: the collection, then an operation
+// on that collection, then a call to that operation that comes back with the
+// document. The pid taken at the top is the pid still serving at the bottom,
+// and the proof of that is a signal 0 rather than the absence of a complaint.
+func TestACollectionIsDeclaredOnARunningDaemonAndThenOperatedOnTheSameConnection(t *testing.T) {
+	dir := t.TempDir()
+
+	// A database and nothing in it. This is the state of the world the daemon
+	// is started on, not a measurement — the measurement is that the empty
+	// catalogue below is empty.
+	signature := seedAnEmptyDatabase(t, dir)
+
+	daemon, address := startDaemon(t, dir)
+	pid := daemon.Process.Pid
+
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := Dial(Connection{
+		Account: "acme", Password: wrapperPassword, Host: host, Port: port,
+		DBName: "main", Signature: signature,
+	}, Options{Insecure: true, Timeout: 10 * time.Second, RequestTimeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("dialling the daemon: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := client.Operate(liveSecret); err != nil {
+		t.Fatalf("proving the server secret: %v", err)
+	}
+
+	// The control that makes everything below legible, and the premise of the
+	// test at the same time: this connection can already read this database,
+	// and there is nothing in it. An Establish that appears to work on a
+	// database that already held the collection would measure nothing.
+	before, err := client.WhatIsHere()
+	if err != nil {
+		t.Fatalf("the connection cannot even read the catalogue: %v", err)
+	}
+	if len(before.Collections) != 0 {
+		t.Fatalf("the daemon started on a database that already holds %d collections, so declaring one here proves nothing: %+v",
+			len(before.Collections), before.Collections)
+	}
+
+	// 1. The collection, on a daemon that has been running since before this
+	//    test knew what it wanted to declare.
+	made, err := client.Establish(Spec{
+		Name: "notes",
+		Key:  Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
+		Indexes: []Index{{
+			Name:   "by_author",
+			Fields: []Field{{Path: "author", Type: store.TypeString, Missing: store.MissingSkip}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("establishing notes over the wire: %v", err)
+	}
+	if made.Name != "notes" {
+		t.Fatalf("the collection came back as %q", made.Name)
+	}
+	// The ids are the store's, assigned on the way in, and they are the
+	// reason the answer is read off the collection rather than echoed.
+	if made.ID == 0 {
+		t.Fatalf("the collection came back with id 0, so nothing assigned it one: %+v", made)
+	}
+	if len(made.Indexes) != 1 || made.Indexes[0].Name != "by_author" {
+		t.Fatalf("the collection came back with indexes %+v", made.Indexes)
+	}
+
+	// And the running server's own catalogue says so, which the answer above
+	// could have claimed without it being true.
+	after, err := client.WhatIsHere()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Collections) != 1 || after.Collections[0].Name != "notes" {
+		t.Fatalf("the catalogue of the running daemon holds %+v", after.Collections)
+	}
+
+	// 2. An operation on the collection that did not exist a moment ago.
+	add, err := client.Declare(Operation{
+		Name: "notes.add", Collection: "notes", Action: store.ActionInsert,
+		Input: []Parameter{
+			{Name: "body", Type: store.TypeString, Required: true},
+			{Name: "author", Type: store.TypeString, Required: true},
+		},
+		Document: map[string]Term{"body": {Arg: "body"}, "author": {Arg: "author"}},
+	})
+	if err != nil {
+		t.Fatalf("declaring notes.add over the wire onto a collection declared over the wire: %v", err)
+	}
+	if add.Version != 1 {
+		t.Fatalf("notes.add came back at version %d, want 1", add.Version)
+	}
+
+	if _, err := client.Invoke("notes.add", map[string]any{"body": "the first note", "author": "ann"}); err != nil {
+		t.Fatalf("invoking an operation on a collection declared a moment ago: %v", err)
+	}
+
+	// 3. Read it back through the index that arrived with the collection.
+	//    This is what says the declaration is real to the running engine and
+	//    not merely written down somewhere: an index that was not built would
+	//    return nothing here and fail nowhere else.
+	if _, err := client.Declare(Operation{
+		Name: "notes.by_author", Collection: "notes", Action: store.ActionScan,
+		Index: "by_author",
+		Input: []Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+		From:  &Endpoint{Terms: []Term{{Arg: "author"}}},
+		To:    &Endpoint{Terms: []Term{{Arg: "author"}}},
+		Limit: 10,
+	}); err != nil {
+		t.Fatalf("declaring notes.by_author: %v", err)
+	}
+
+	read, err := client.Invoke("notes.by_author", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatalf("invoking notes.by_author: %v", err)
+	}
+	if read.Count != 1 {
+		t.Fatalf("the scan returned %d rows, want the 1 document just written: %+v", read.Count, read.Rows)
+	}
+	if got := read.Rows[0]["body"]; got != "the first note" {
+		t.Fatalf("the row came back as %+v", read.Rows[0])
+	}
+
+	// 4. And the daemon is the one this test started, still up, never
+	//    signalled. Everything above happened while it was serving.
+	if daemon.Process.Pid != pid {
+		t.Fatalf("the daemon's pid changed from %d to %d", pid, daemon.Process.Pid)
+	}
+	if daemon.ProcessState != nil {
+		t.Fatalf("the daemon exited during the test: %v", daemon.ProcessState)
+	}
+	if err := daemon.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("the daemon is no longer running: %v", err)
+	}
+	t.Logf("the daemon that answered every request above is still pid %d", pid)
+}
+
+// seedAnEmptyDatabase creates the database in dir with nothing declared in it,
+// and hands back the signature a connection string for it needs. The server it
+// opens is closed before it returns — the daemon takes the directory next.
+//
+// It exists because seedTheCollection cannot be used for the test above: that
+// helper declares the collection the daemon is then asked to serve, which is
+// exactly the premise the test above has to start without.
+func seedAnEmptyDatabase(t *testing.T, dir string) string {
+	t.Helper()
+
+	srv, err := server.New(server.Options{Dir: dir, Secret: liveSecret})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, release, err := srv.Store("acme", "main")
+	if err != nil {
+		_ = srv.Close()
+		t.Fatal(err)
+	}
+	if err := db.Commit(); err != nil {
+		release()
+		_ = srv.Close()
+		t.Fatal(err)
+	}
+	if names := db.Collections(); len(names) != 0 {
+		release()
+		_ = srv.Close()
+		t.Fatalf("a database that was just created already holds %v", names)
+	}
+	release()
+
+	signature, err := srv.Sign("acme", wrapperPassword, "main")
+	if err != nil {
+		_ = srv.Close()
+		t.Fatal(err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("closing the seeding server: %v", err)
+	}
+	return signature
 }

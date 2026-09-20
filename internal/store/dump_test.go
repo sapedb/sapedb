@@ -17,11 +17,11 @@ import (
 func populate(t *testing.T, store *Store) *Collection {
 	t.Helper()
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
+	if _, err := store.Declare(Caller{}, Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
 		t.Fatal(err)
 	}
 	notes, err := store.Collection("notes")
@@ -291,10 +291,10 @@ func TestARestoreNeedsAnEmptyDatabase(t *testing.T) {
 
 	// A database with no collections but a history is not empty either.
 	_, used := fresh(t, 61)
-	if _, err := used.Declare(Spec{Name: "gone", Key: Key{Path: "id", Type: TypeString}}); err != nil {
+	if _, err := used.Declare(Caller{}, Spec{Name: "gone", Key: Key{Path: "id", Type: TypeString}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := used.Drop("gone"); err != nil {
+	if err := used.Drop(Caller{}, "gone"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := used.Restore(bytes.NewReader(out.Bytes())); !errors.Is(err, ErrNotEmpty) {
@@ -308,7 +308,7 @@ func TestARestoreNeedsAnEmptyDatabase(t *testing.T) {
 // a gap.
 func TestAConsumerCanAskWhetherItHasFallenTooFarBehind(t *testing.T) {
 	_, store := fresh(t, 62)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func TestAnEmptyLogIsNotBehind(t *testing.T) {
 // rather than half of it.
 func TestASnapshotHoldsTheLastCommitAndNotWorkInProgress(t *testing.T) {
 	_, store := fresh(t, 65)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +427,7 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}

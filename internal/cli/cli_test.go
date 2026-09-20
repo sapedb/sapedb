@@ -1851,7 +1851,7 @@ func buildRealDump(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Declare(store.Spec{
+	if _, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "people",
 		Key:  store.Key{Path: "id", Type: "string", Auto: "ulid"},
 	}); err != nil {

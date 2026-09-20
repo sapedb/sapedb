@@ -257,7 +257,7 @@ func TestByAuthorFloorRowReadsOneStretchBothWays(t *testing.T) {
 // is ever stored — not discovered the first time somebody runs it.
 func TestAnArrayConstantAtAScanBoundIsRefusedRatherThanPanicking(t *testing.T) {
 	_, store := fresh(t, 153)
-	widgets, err := store.Declare(Spec{
+	widgets, err := store.Declare(Caller{}, Spec{
 		Name: "widgets",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{
@@ -373,7 +373,7 @@ func TestScanAcrossTellsTwoConstantsApart(t *testing.T) {
 func TestTotalsAcrossTellsTwoConstantsApart(t *testing.T) {
 	_, _, store := partitioned(t, 155)
 
-	lines, err := store.Declare(Spec{
+	lines, err := store.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},

@@ -57,7 +57,7 @@ func loadRows(t *testing.T, server *Server, account, name string, documents int)
 	}
 	defer release()
 
-	collection, err := db.Declare(store.Spec{
+	collection, err := db.Declare(store.Caller{}, store.Spec{
 		Name: "rows",
 		Key:  store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
 	})

@@ -55,7 +55,7 @@ func ledger(t *testing.T, store *Store) {
 			}},
 		},
 	} {
-		if _, err := store.Declare(spec); err != nil {
+		if _, err := store.Declare(Caller{}, spec); err != nil {
 			t.Fatalf("declare %q: %v", spec.Name, err)
 		}
 	}

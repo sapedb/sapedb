@@ -19,7 +19,7 @@ import (
 func takings(t *testing.T, store *Store) *Collection {
 	t.Helper()
 
-	made, err := store.Declare(Spec{
+	made, err := store.Declare(Caller{}, Spec{
 		Name: "lines",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Rollups: []Rollup{{
@@ -185,7 +185,7 @@ func TestATotalSurvivesARollbackAndACrash(t *testing.T) {
 func TestARollupDeclaredAfterTheDataIsFilledFromIt(t *testing.T) {
 	_, store := fresh(t, 403)
 
-	plain, err := store.Declare(Spec{
+	plain, err := store.Declare(Caller{}, Spec{
 		Name: "lines", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 	})
 	if err != nil {
@@ -200,7 +200,7 @@ func TestARollupDeclaredAfterTheDataIsFilledFromIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	withTotals, err := store.Declare(Spec{
+	withTotals, err := store.Declare(Caller{}, Spec{
 		Name: "lines", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Rollups: []Rollup{{
 			Name:  "per_account",
@@ -217,7 +217,7 @@ func TestARollupDeclaredAfterTheDataIsFilledFromIt(t *testing.T) {
 
 	// Dropping it takes its rows with it, rather than leaving a keyspace
 	// nothing points at.
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name: "lines", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 	}); err != nil {
 		t.Fatal(err)
@@ -258,7 +258,7 @@ func TestWhatARollupWillNotHold(t *testing.T) {
 		{Name: "odd type", Count: true, Group: []Field{{Path: "a", Type: "blob", Missing: MissingSkip}}},
 		{Name: "sums nothing named", Count: true, Sum: []string{""}},
 	} {
-		if _, err := store.Declare(Spec{
+		if _, err := store.Declare(Caller{}, Spec{
 			Name: "lines", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 			Rollups: []Rollup{wrong},
 		}); !errors.Is(err, ErrDeclaration) {
@@ -285,7 +285,7 @@ func TestWhatARollupWillNotHold(t *testing.T) {
 func TestARollupOfAPartitionedCollectionNamesOneGroup(t *testing.T) {
 	_, _, store := partitioned(t, 405)
 
-	lines, err := store.Declare(Spec{
+	lines, err := store.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},
@@ -412,7 +412,7 @@ func TestADocumentTheTotalsRefuseIsNotStored(t *testing.T) {
 func TestATotalReadStaysInsideWhatItWasAskedFor(t *testing.T) {
 	_, store := fresh(t, 408)
 
-	lines, err := store.Declare(Spec{
+	lines, err := store.Declare(Caller{}, Spec{
 		Name: "lines",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Rollups: []Rollup{
@@ -463,7 +463,7 @@ func TestATotalReadStaysInsideWhatItWasAskedFor(t *testing.T) {
 func TestTotalsMergedFromPartitionsComeOutInGroupOrder(t *testing.T) {
 	_, _, store := partitioned(t, 409)
 
-	lines, err := store.Declare(Spec{
+	lines, err := store.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},
@@ -510,7 +510,7 @@ func TestARollupDeclaredLateIsFilledFromThisCollectionOnlyAndOnlyOnce(t *testing
 	_, store := fresh(t, 410)
 	lines := takings(t, store)
 
-	notes, err := store.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
+	notes, err := store.Declare(Caller{}, Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestARollupDeclaredLateIsFilledFromThisCollectionOnlyAndOnlyOnce(t *testing
 		t.Fatal(err)
 	}
 
-	both, err := store.Declare(Spec{
+	both, err := store.Declare(Caller{}, Spec{
 		Name: "lines",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Rollups: []Rollup{
@@ -586,7 +586,7 @@ func TestARollupThatChangesShapeIsNotTheSameRollup(t *testing.T) {
 			Count: true, Sum: []string{"amount"},
 		},
 	} {
-		if _, err := store.Declare(Spec{
+		if _, err := store.Declare(Caller{}, Spec{
 			Name: "lines", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"},
 			Rollups: []Rollup{changed},
 		}); !errors.Is(err, ErrIncompatible) {
@@ -665,7 +665,7 @@ func TestATotalReadStopsWhenTheCallerDoes(t *testing.T) {
 	// And again where the rows had to be merged out of several partitions,
 	// which is a different loop handing them over.
 	_, _, split := partitioned(t, 414)
-	months, err := split.Declare(Spec{
+	months, err := split.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},
@@ -821,7 +821,7 @@ func TestATotalReadOverARangeWithBothEndsNamedKeepsExactlyWhatIsBetweenThem(t *t
 func TestATotalReadOverARangeWithBothEndsNamedKeepsExactlyWhatIsBetweenThemAcrossPartitions(t *testing.T) {
 	_, _, store := partitioned(t, 417)
 
-	lines, err := store.Declare(Spec{
+	lines, err := store.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},

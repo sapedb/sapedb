@@ -115,7 +115,7 @@ func declareSpread(t *testing.T, server *Server, account, name string, documents
 		t.Fatal(err)
 	}
 
-	collection, err := db.Declare(store.Spec{
+	collection, err := db.Declare(store.Caller{}, store.Spec{
 		Name:      "spread",
 		Key:       store.Key{Path: "id", Type: store.TypeString},
 		Partition: &store.Partition{By: store.ByHash, Into: 8},

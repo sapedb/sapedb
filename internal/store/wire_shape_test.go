@@ -80,7 +80,7 @@ func TestBoundFieldNamesAreLowerCase(t *testing.T) {
 func TestSpecIndexesIsNeverNull(t *testing.T) {
 	_, db := fresh(t, 402)
 
-	collection, err := db.Declare(Spec{
+	collection, err := db.Declare(Caller{}, Spec{
 		Name: "empty",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 	})
@@ -133,7 +133,7 @@ func TestSpecIndexesIsNeverNull(t *testing.T) {
 // memory.
 func TestEndpointTermsIsNeverNull(t *testing.T) {
 	_, db := fresh(t, 403)
-	if _, err := db.Declare(articles()); err != nil {
+	if _, err := db.Declare(Caller{}, articles()); err != nil {
 		t.Fatal(err)
 	}
 

@@ -14,7 +14,7 @@ func composed(t *testing.T) *Store {
 	t.Helper()
 	_, s := fresh(t, 7)
 
-	if _, err := s.Declare(Spec{
+	if _, err := s.Declare(Caller{}, Spec{
 		Name: "items",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{

@@ -293,6 +293,33 @@ func (c *Client) Declare(operation store.Operation) (store.Operation, error) {
 	return answer.Operation, nil
 }
 
+// Establish declares a collection on the database this connection is for, and
+// hands back the collection as it now stands.
+//
+// Only an operator may: call Operate first, exactly as for Declare. Unlike
+// Declare there is no version in the answer, because a collection has none:
+// establishing a name that already exists brings that one collection up to
+// date in place. What makes the returned Spec worth reading is the ids —
+// store.Declare assigns the collection's, and one to every index and rollup it
+// adds — and the fact that it is what actually took effect: an index left out
+// of the declaration is gone from it.
+//
+// The body key is "spec", which is what the server's own `establishing`
+// struct decodes (internal/server/establish.go).
+func (c *Client) Establish(spec store.Spec) (store.Spec, error) {
+	payload, err := c.ask(protocol.Establish, map[string]any{"spec": spec})
+	if err != nil {
+		return store.Spec{}, err
+	}
+	answer := struct {
+		Spec store.Spec `json:"spec"`
+	}{}
+	if err := json.Unmarshal(payload, &answer); err != nil {
+		return store.Spec{}, err
+	}
+	return answer.Spec, nil
+}
+
 // Invoke runs a declared operation.
 //
 // The body key is "args", not "arguments": that is what the server's own

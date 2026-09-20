@@ -46,7 +46,7 @@ func lockstepStore(t *testing.T, seed int64) *Store {
 	// unpartitioned.
 	_, _, store := partitioned(t, seed)
 
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name:      "wide",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},
@@ -134,7 +134,7 @@ func lockstepStore(t *testing.T, seed int64) *Store {
 	// declaration reaches refusedBackwardsRange instead of being refused
 	// earlier by scanAcross for a reason that has nothing to do with
 	// direction.
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name: "plain",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{
@@ -404,7 +404,7 @@ func TestARollupBoundaryNumberNamesItsOwnField(t *testing.T) {
 // a write path, doing the equivalent check, that was not.
 func TestAWriteWithAnUnencodableFieldNamesItsOwnField(t *testing.T) {
 	_, store := fresh(t, 5407)
-	collection, err := store.Declare(Spec{
+	collection, err := store.Declare(Caller{}, Spec{
 		Name: "writes",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{Name: "w2any", Fields: []Field{

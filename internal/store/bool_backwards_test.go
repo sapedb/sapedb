@@ -29,7 +29,7 @@ import (
 // this does not claim to cover — left as open debt in this task's report.
 func TestABackwardsBoolRangeIsNowRefused(t *testing.T) {
 	_, store := fresh(t, 7701)
-	_, err := store.Declare(Spec{
+	_, err := store.Declare(Caller{}, Spec{
 		Name: "flags",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{Name: "by_flag", Fields: []Field{

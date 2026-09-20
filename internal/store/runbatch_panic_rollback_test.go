@@ -32,7 +32,7 @@ import "testing"
 // whatever runStep panics with, regardless of cause.
 func TestRunBatchRollsBackAndRepanicsWhenAStepPanics(t *testing.T) {
 	_, s := fresh(t, 8301)
-	_, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
+	_, err := s.Declare(Caller{}, Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -205,7 +205,7 @@ func TestScanAcrossRefusesTwoDifferentArguments(t *testing.T) {
 func TestTotalsAcrossRefusesTwoDifferentArguments(t *testing.T) {
 	_, _, store := partitioned(t, 655)
 
-	if _, err := store.Declare(Spec{
+	if _, err := store.Declare(Caller{}, Spec{
 		Name:      "lines",
 		Key:       Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Partition: &Partition{By: ByTime, Every: EveryMonth},

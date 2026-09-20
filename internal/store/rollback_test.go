@@ -38,7 +38,7 @@ func everything(t *testing.T, collection *Collection) ([]string, []string) {
 func TestRollbackLeavesNothingOfTheTransaction(t *testing.T) {
 	_, store := fresh(t, 70)
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestRollbackLeavesNothingOfTheTransaction(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
+	if _, err := store.Declare(Caller{}, Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DeclareOperation(Caller{}, byAuthor()); err != nil {
@@ -129,7 +129,7 @@ func TestRollbackLeavesNothingOfTheTransaction(t *testing.T) {
 func TestAHandleFromBeforeARollbackIsRefused(t *testing.T) {
 	_, store := fresh(t, 71)
 
-	held, err := store.Declare(articles())
+	held, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestAHandleFromBeforeARollbackIsRefused(t *testing.T) {
 func TestRollbackGivesTheSpaceBackWithoutLosingAnything(t *testing.T) {
 	_, store := fresh(t, 72)
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestRollbackGivesTheSpaceBackWithoutLosingAnything(t *testing.T) {
 func TestRollingBackNothingIsHarmless(t *testing.T) {
 	_, store := fresh(t, 73)
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestRollingBackNothingIsHarmless(t *testing.T) {
 func TestAbandonedWorkDoesNotLeaveTheLiveTreeMarkedAsRubbish(t *testing.T) {
 	_, store := fresh(t, 74)
 
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}

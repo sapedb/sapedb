@@ -108,7 +108,7 @@ func keysOf(entries []Found) []string {
 
 func TestADocumentComesBackByItsKey(t *testing.T) {
 	_, store := fresh(t, 1)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestADocumentComesBackByItsKey(t *testing.T) {
 
 func TestAKeyThatWasGivenIsKept(t *testing.T) {
 	_, store := fresh(t, 2)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestAKeyThatWasGivenIsKept(t *testing.T) {
 	spec := articles()
 	spec.Name = "strict"
 	spec.Key.Auto = ""
-	strict, err := store.Declare(spec)
+	strict, err := store.Declare(Caller{}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestAKeyThatWasGivenIsKept(t *testing.T) {
 
 func TestDocumentsComeBackInKeyOrder(t *testing.T) {
 	_, store := fresh(t, 3)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestDocumentsComeBackInKeyOrder(t *testing.T) {
 
 func TestAnIndexFindsDocumentsByAField(t *testing.T) {
 	_, store := fresh(t, 4)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestARangeIsWhereItWasAskedToStartAndStop(t *testing.T) {
 			Fields: []Field{{Path: "value", Type: TypeNumber, Missing: MissingSkip}},
 		}},
 	}
-	collection, err := store.Declare(spec)
+	collection, err := store.Declare(Caller{}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestARangeIsWhereItWasAskedToStartAndStop(t *testing.T) {
 
 func TestAUniqueIndexRefusesASecondDocument(t *testing.T) {
 	_, store := fresh(t, 6)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestAUniqueIndexRefusesASecondDocument(t *testing.T) {
 
 func TestAnArrayFieldPutsTheDocumentUnderEachElement(t *testing.T) {
 	_, store := fresh(t, 7)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestAnArrayFieldPutsTheDocumentUnderEachElement(t *testing.T) {
 
 func TestARewriteLeavesNothingBehind(t *testing.T) {
 	_, store := fresh(t, 8)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestARewriteLeavesNothingBehind(t *testing.T) {
 
 func TestAValueOfTheWrongTypeIsRefused(t *testing.T) {
 	_, store := fresh(t, 9)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestAValueOfTheWrongTypeIsRefused(t *testing.T) {
 
 func TestWhatIsDeclaredIsWhatIsStored(t *testing.T) {
 	disk, store := fresh(t, 10)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +474,7 @@ func TestAnIndexAddedLaterIsBuiltFromWhatIsThere(t *testing.T) {
 	_, store := fresh(t, 11)
 	spec := articles()
 	spec.Indexes = spec.Indexes[:1] // by_author only
-	collection, err := store.Declare(spec)
+	collection, err := store.Declare(Caller{}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestAnIndexAddedLaterIsBuiltFromWhatIsThere(t *testing.T) {
 	// Declared again with the unique index on the end: it has to be filled
 	// from the documents already stored, or it would be an index that agrees
 	// with the future and not the past.
-	collection, err = store.Declare(articles())
+	collection, err = store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestAnIndexAddedLaterIsBuiltFromWhatIsThere(t *testing.T) {
 	// Dropping one takes its entries with it.
 	fewer := articles()
 	fewer.Indexes = fewer.Indexes[:1]
-	collection, err = store.Declare(fewer)
+	collection, err = store.Declare(Caller{}, fewer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,19 +517,19 @@ func TestAnIndexAddedLaterIsBuiltFromWhatIsThere(t *testing.T) {
 
 func TestAnIndexCannotChangeShapeUnderItsOwnName(t *testing.T) {
 	_, store := fresh(t, 12)
-	if _, err := store.Declare(articles()); err != nil {
+	if _, err := store.Declare(Caller{}, articles()); err != nil {
 		t.Fatal(err)
 	}
 
 	changed := articles()
 	changed.Indexes[1].Unique = false
-	if _, err := store.Declare(changed); !errors.Is(err, ErrIncompatible) {
+	if _, err := store.Declare(Caller{}, changed); !errors.Is(err, ErrIncompatible) {
 		t.Errorf("want ErrIncompatible, got %v", err)
 	}
 
 	moved := articles()
 	moved.Key.Path = "key"
-	if _, err := store.Declare(moved); !errors.Is(err, ErrIncompatible) {
+	if _, err := store.Declare(Caller{}, moved); !errors.Is(err, ErrIncompatible) {
 		t.Errorf("a moved primary key: want ErrIncompatible, got %v", err)
 	}
 }
@@ -550,7 +550,7 @@ func TestADeclarationThatMakesNoSenseIsRefused(t *testing.T) {
 		"spreading over a field it does not have": func(s Spec) Spec { s.Indexes[2].Array = "other"; return s },
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.Declare(spec(articles())); err == nil {
+			if _, err := store.Declare(Caller{}, spec(articles())); err == nil {
 				t.Error("the declaration was accepted")
 			}
 		})
@@ -559,11 +559,11 @@ func TestADeclarationThatMakesNoSenseIsRefused(t *testing.T) {
 
 func TestDroppingACollectionTakesEverythingWithIt(t *testing.T) {
 	_, store := fresh(t, 14)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, err := store.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
+	other, err := store.Declare(Caller{}, Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +573,7 @@ func TestDroppingACollectionTakesEverythingWithIt(t *testing.T) {
 		put(t, other, map[string]any{"body": fmt.Sprint(i)})
 	}
 
-	if err := store.Drop("articles"); err != nil {
+	if err := store.Drop(Caller{}, "articles"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Collection("articles"); !errors.Is(err, ErrNoCollection) {
@@ -591,7 +591,7 @@ func TestDroppingACollectionTakesEverythingWithIt(t *testing.T) {
 	}
 
 	// And the name is free again.
-	if _, err := store.Declare(articles()); err != nil {
+	if _, err := store.Declare(Caller{}, articles()); err != nil {
 		t.Fatal(err)
 	}
 	if entries := scan(t, mustGet(t, store, "articles"), "by_author", Range{}); len(entries) != 0 {
@@ -613,7 +613,7 @@ func mustGet(t *testing.T, store *Store, name string) *Collection {
 // in every index that should hold it.
 func TestTheIndexesAlwaysAgreeWithTheDocuments(t *testing.T) {
 	_, store := fresh(t, 15)
-	collection, err := store.Declare(articles())
+	collection, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,7 +783,7 @@ func TestAHandleHeldAcrossADeclarationMaintainsTheNewIndex(t *testing.T) {
 	_, store := fresh(t, 16)
 	spec := articles()
 	spec.Indexes = spec.Indexes[:1]
-	held, err := store.Declare(spec)
+	held, err := store.Declare(Caller{}, spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +791,7 @@ func TestAHandleHeldAcrossADeclarationMaintainsTheNewIndex(t *testing.T) {
 
 	// A second index is declared through the store, while `held` stays what the
 	// caller has.
-	if _, err := store.Declare(articles()); err != nil {
+	if _, err := store.Declare(Caller{}, articles()); err != nil {
 		t.Fatal(err)
 	}
 	put(t, held, map[string]any{"id": "after", "author": "ann", "slug": "s-after"})
@@ -812,13 +812,13 @@ func TestAHandleHeldAcrossADeclarationMaintainsTheNewIndex(t *testing.T) {
 
 func TestAHandleToADroppedCollectionRefusesToWrite(t *testing.T) {
 	_, store := fresh(t, 17)
-	held, err := store.Declare(articles())
+	held, err := store.Declare(Caller{}, articles())
 	if err != nil {
 		t.Fatal(err)
 	}
 	put(t, held, map[string]any{"id": "a", "title": "One"})
 
-	if err := store.Drop("articles"); err != nil {
+	if err := store.Drop(Caller{}, "articles"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -837,7 +837,7 @@ func TestAHandleToADroppedCollectionRefusesToWrite(t *testing.T) {
 // story.
 func TestADatabaseSaysHowItWasLeft(t *testing.T) {
 	disk, store := fresh(t, 95)
-	if _, err := store.Declare(articles()); err != nil {
+	if _, err := store.Declare(Caller{}, articles()); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Commit(); err != nil {

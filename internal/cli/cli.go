@@ -687,8 +687,8 @@ type schema struct {
 // declaration has not changed is not given a new version. That is what makes
 // this safe to run on every deploy, which is the only way it will actually be
 // run.
-// by is what the change log records against every operation this run
-// declares. It is the account the command was pointed at, and it is a label
+// by is what the change log records against every collection and every
+// operation this run declares. It is the account the command was pointed at, and it is a label
 // rather than a proof: running apply means holding the database file's
 // exclusive lock, and anybody who can do that could have written the same
 // bytes by hand. It is still the best name available at this point, and the
@@ -723,7 +723,7 @@ func apply(db *store.Store, files []string, out io.Writer, by store.Caller) erro
 		}
 
 		for _, spec := range wanted.Collections {
-			if _, err := db.Declare(spec); err != nil {
+			if _, err := db.Declare(by, spec); err != nil {
 				return fmt.Errorf("%s: collection %q: %w", name, spec.Name, err)
 			}
 			fmt.Fprintf(&progress, "collection %s\n", spec.Name)

@@ -131,6 +131,95 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A collection can be declared on a server that is already running.** The
+  `Declare` frame could put an *operation* on a live daemon; there was no way
+  to put a *collection* there. So adding one still meant stopping the server
+  and running `sapedb apply` — that command opens the database file directly
+  and takes the exclusive lock, which is refused while the server is up — and
+  every live connection dropped for a change that writes one key and builds
+  one index.
+
+  Half of a hole is worse than the whole of one here, because of what the
+  missing half blocks. An external operation that solves a whole problem
+  through the shapes it publishes is not one operation: it is a module, and a
+  module arrives with somewhere to keep its data (a collection, its indexes,
+  its rollups), the vocabulary to reach it (operations) and the shapes it
+  publishes. With only the operation half declarable over a connection, such
+  a module could not be installed into an empty database at all — it could
+  only ever be a handful of operations pointed at somebody else's
+  collections.
+
+  **New frame: `establish`, type 14.** Frames 1 to 13 do not change what they
+  are, so this is a new code rather than a field added to `declare`: a frame
+  whose meaning depended on which of two fields was set would be exactly that
+  change, dressed as an addition. `fixtures/frames.json` gains the type and
+  one case, which is a change the TypeScript client's own fixture test will
+  see. The name avoids "declare" on purpose — in `internal/store`, `Declare`
+  is the *collection* one and `DeclareOperation` is the *operation* one,
+  while frame 13 named `declare` carries the operation, and doubling that
+  crossed pair on the wire would help nobody.
+
+  It is not a second, looser way in. Only an operator may send it, proved the
+  same way `explore` and `declare` are — by answering the welcome's challenge
+  with the server's own secret. It calls `store.Declare`, which is the
+  function `sapedb apply` calls, which begins with `spec.validate()`; there
+  is no second copy of the rules and nothing is normalised on the way in.
+  That is measured rather than asserted:
+  `TestEstablishingOverTheWireRefusesExactlyWhatApplyRefuses` runs nineteen
+  declarations down **both** paths against **one** database and demands the
+  same sentence, word for word — including the three refusals only a
+  redeclaration can reach, which `validate` cannot see, so a handler that
+  validated and stopped would pass sixteen rows and fail those three. Three
+  of the nineteen must be **accepted** by both paths, and the test fails if
+  that count is not three, because a table of nothing but refusals measures
+  nothing.
+
+  **Declaring a name that already exists is not a new version.** This is
+  where `establish` and `declare` part company, and the reason is physical
+  rather than a matter of taste. An operation is versioned because a caller
+  is built against a version and a redeclaration must not move the ground
+  under it. A collection is *where the documents are*, and there is one of
+  those: two versions would be two sets of index entries over one set of
+  documents, or two sets of documents, and either way the next writer has to
+  be told which it meant through an interface that has never carried a
+  version. So establishing a name that exists brings **that** collection up
+  to date, in place — which is `store.Declare`'s own long-standing behaviour,
+  not something this path invents. Indexes and rollups the declaration names
+  are added (built over the documents already stored) or kept with the ids
+  they already had; ones it leaves out are dropped with their entries; and
+  what cannot be done in place — the primary key, how the collection is
+  divided, an index that keeps its name and changes its shape — is refused
+  in the store's own words rather than done quietly.
+
+  The answer is the collection as it now stands, read off the store rather
+  than echoed back, so a caller sees what actually took effect: the ids the
+  store assigned, and the index it did not mention missing from the list.
+
+  `Client.Establish` is the method on the public surface (the guard there now
+  counts thirty-four names, not thirty-three).
+
+- **The change log says who declared or dropped a collection.** Three
+  `record()` calls in `internal/store/store.go` carried no attribution at
+  all: the first declaration of a collection, the redeclaration that upgrades
+  one, and the drop that destroys one. All three are fixed —
+  `Store.Declare` and `Store.Drop` now take a `Caller` the way
+  `Store.DeclareOperation` already did, and the entries go in under operation
+  `declare` and `drop` with that caller's actor.
+
+  The drop was the worst of the three and not by a little. A declaration can
+  be read back off the collection that now exists, so its entry is a
+  convenience; a drop leaves nothing behind to ask, and the entry that did
+  not say who removed it was the only record that the collection had ever
+  been there.
+
+  What the name is worth differs by path and neither path pretends otherwise:
+  over the wire it is the account whose connection the server itself
+  verified, through `sapedb apply` it is the account the command was pointed
+  at — a label rather than a proof, since running apply means holding the
+  file's exclusive lock. An embedder that passes `Caller{}` gets an entry
+  that says so, which is measured as the contrast row in every one of these
+  tests rather than assumed.
+
 - **A build can say which build it is.** Until now it could not, and the
   measurement is the whole point: two binaries compiled six months apart
   introduced themselves to a client with byte-identical words. The `version`
