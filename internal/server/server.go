@@ -1190,6 +1190,7 @@ func codeFor(err error) string {
 		{store.ErrNoKey, "no_key"},
 		{store.ErrDeclaration, "declaration"},
 		{store.ErrDamaged, "damaged"},
+		{store.ErrIncompatible, "incompatible"},
 	} {
 		if errors.Is(err, known.err) {
 			return known.code

@@ -767,6 +767,34 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Fixed
 
+- **`store.ErrIncompatible` now has its own wire code, `"incompatible"`.**
+  `codeFor` maps every sentinel a server refusal can carry to a word a client
+  switches on, and `ErrIncompatible` — the refusal `store.Declare` gives when
+  a redeclaration cannot be applied in place, such as "the primary key of `X`
+  was declared ..." — had no entry in that table. It reached a caller as the
+  generic `"failed"`, indistinguishable from a disk error or a closed
+  database.
+
+  This only started mattering with the `Establish` frame: before it,
+  `ErrIncompatible` could only be raised offline inside `sapedb apply`, where
+  a human reads the sentence. `Establish` sends it down a connection instead,
+  where a program has to switch on a code. It has to land before the first
+  tagged release, because `codeFor`'s table is a contract this frees: adding
+  a code today is an addition, and adding one after clients have written
+  `"failed"`-keyed handling for this refusal would be a breaking change.
+
+  The `Declare` frame (which stores an *operation*, not a collection) does
+  not reach this error by the same route: it calls `store.DeclareOperation`,
+  whose own validation only ever raises `store.ErrDeclaration` (already
+  mapped, to `"declaration"`), and redeclaring an operation name that already
+  exists writes a new version rather than conflicting with the old one.
+  Measured by `TestAnIncompatibleEstablishReachesTheWireAsIncompatible`,
+  which sends the frame and reads the code back over a real connection
+  rather than reading `codeFor`'s table, and
+  `TestDeclareFrameDoesNotReachErrIncompatible`, which measures that the
+  `Declare` frame keeps versioning instead
+  (`internal/server/incompatible_test.go`).
+
 - **A database that applies a declaration now spends the collection id that
   arrived with it.** `Store.Apply` installs the spec it is given, numbers and
   all, which is exactly right — a replica whose collections were numbered
