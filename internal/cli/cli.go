@@ -13,6 +13,7 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -681,6 +682,16 @@ func apply(db *store.Store, files []string, out io.Writer) error {
 		return fmt.Errorf("%w: apply needs a file", ErrUsage)
 	}
 
+	// Buffered rather than written to out as each line is decided: every
+	// message below reports something declared inside this one transaction,
+	// and there is exactly one Commit for the whole run, at the end. A later
+	// file failing does not undo what an earlier file already printed — the
+	// terminal has no equivalent of the transaction the database itself
+	// rolled back. So nothing here reaches the caller's out until Commit
+	// below actually succeeds; on any earlier return, this buffer is
+	// dropped with everything else the failed run touched.
+	var progress bytes.Buffer
+
 	for _, name := range files {
 		content, err := os.ReadFile(name)
 		if err != nil {
@@ -698,7 +709,7 @@ func apply(db *store.Store, files []string, out io.Writer) error {
 			if _, err := db.Declare(spec); err != nil {
 				return fmt.Errorf("%s: collection %q: %w", name, spec.Name, err)
 			}
-			fmt.Fprintf(out, "collection %s\n", spec.Name)
+			fmt.Fprintf(&progress, "collection %s\n", spec.Name)
 		}
 
 		for _, operation := range wanted.Operations {
@@ -707,7 +718,7 @@ func apply(db *store.Store, files []string, out io.Writer) error {
 				return err
 			}
 			if found && sameOperation(before, operation) {
-				fmt.Fprintf(out, "operation %s unchanged at version %d\n", operation.Name, before.Version)
+				fmt.Fprintf(&progress, "operation %s unchanged at version %d\n", operation.Name, before.Version)
 				continue
 			}
 
@@ -715,11 +726,15 @@ func apply(db *store.Store, files []string, out io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("%s: operation %q: %w", name, operation.Name, err)
 			}
-			fmt.Fprintf(out, "operation %s version %d\n", stored.Name, stored.Version)
+			fmt.Fprintf(&progress, "operation %s version %d\n", stored.Name, stored.Version)
 		}
 	}
 
-	return db.Commit()
+	if err := db.Commit(); err != nil {
+		return err
+	}
+	_, err := out.Write(progress.Bytes())
+	return err
 }
 
 // sameOperation compares a declaration with one already stored, ignoring the

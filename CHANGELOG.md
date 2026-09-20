@@ -25,6 +25,20 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Fixed
 
+- `apply` (`internal/cli/cli.go`) printed `collection NAME` and
+  `operation NAME version N` to stdout as each declaration was decided,
+  before the run's single `db.Commit()` at the end of the file loop. A
+  multi-file run where a later file failed — even one `checkApply`'s
+  pre-open JSON-shape pass cannot catch, such as an operation naming a
+  collection nothing declared — left stdout claiming an earlier file's
+  collection had been created, when the whole transaction (one `Commit` for
+  every file, by design — see `apply`'s own doc comment) was never
+  committed and nothing was actually written. The database itself was
+  never at risk: nothing durable existed until `Commit` ran either way. Now
+  every line is buffered and only written to stdout once `Commit` actually
+  succeeds, so a failed run's stdout matches what is really on disk.
+  Guarded by `TestApplyDoesNotPrintWhatItRollsBack` in
+  `internal/cli/cli_test.go`.
 - `internal/wire.Client.Invoke` sent its arguments under the JSON key
   `"arguments"`; the server's `call` struct (`internal/server/server.go`)
   decodes `"args"`. Every declared operation invoked through this client

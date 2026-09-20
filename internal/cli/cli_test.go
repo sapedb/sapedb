@@ -1,6 +1,7 @@
 package cli
 
 import (
+	crand "crypto/rand"
 	"encoding/json"
 	"net"
 	"os"
@@ -12,8 +13,10 @@ import (
 	"testing"
 
 	"github.com/sapedb/sapedb/internal/connection"
+	"github.com/sapedb/sapedb/internal/pager"
 	"github.com/sapedb/sapedb/internal/server"
 	"github.com/sapedb/sapedb/internal/signing"
+	"github.com/sapedb/sapedb/internal/store"
 	"github.com/sapedb/sapedb/internal/vfs"
 )
 
@@ -1912,5 +1915,233 @@ func TestWalkTreeSeesAPathThatChangedIdentity(t *testing.T) {
 	}
 	if treesMatch(before, after) {
 		t.Fatal("treesMatch did not notice a path renamed to a different name of the same count")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// restore's own debt: garbage on stdin must never look like a successful
+// restore. buildRealDump below goes around the CLI on purpose — apply has no
+// way to put a document in a collection, only to declare the collection and
+// the operation that would insert one, and inserting one for real needs a
+// server on the other end of a connection. Building the store directly is
+// the only way to get a dump with an actual document in it, and it is
+// exactly the shape a client library would hand this command in production:
+// bytes that came from Store.Dump, not from another instance of this CLI.
+
+// buildRealDump makes a tiny real database with one collection and three
+// documents, and returns it dumped to a string — the positive control this
+// whole file needs: a real dump has to restore, or every case below that
+// checks garbage is refused proves nothing except that this tool refuses
+// everything.
+func buildRealDump(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "source.sapedb")
+	file, err := vfs.OpenFile(path, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+
+	pages, err := pager.Create(file, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(pages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Declare(store.Spec{
+		Name: "people",
+		Key:  store.Key{Path: "id", Type: "string", Auto: "ulid"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := db.Collection("people")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Alice", "Bob", "Carol"} {
+		if _, err := collection.Put(map[string]any{"name": name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	var dumped strings.Builder
+	if _, err := db.Dump(&dumped); err != nil {
+		t.Fatal(err)
+	}
+	return dumped.String()
+}
+
+// TestRestoreOfARealDumpRestoresExactlyItsData is the control case task A6's
+// debt insists on: without this, every case in
+// TestRestoreGarbageLeavesNoVisibleDatabase below would pass just as well if
+// restore refused everything, real dumps included, which is not "fixed",
+// it is "worse". A real dump must restore, keep its collection, and keep
+// every document it held — checked here by dumping the restored database
+// right back out and finding all three names in it.
+func TestRestoreOfARealDumpRestoresExactlyItsData(t *testing.T) {
+	dumped := buildRealDump(t)
+
+	into := start(t)
+	out, errs, status := into.runWith(nil, dumped, "restore")
+	if status != 0 {
+		t.Fatalf("restore of a real dump: %s", errs)
+	}
+	if !strings.Contains(out, "restored to change") {
+		t.Errorf("restore printed %q", out)
+	}
+
+	listed, errs, status := into.run("ls")
+	if status != 0 {
+		t.Fatalf("ls: %s", errs)
+	}
+	if !strings.Contains(listed, "collection people") {
+		t.Fatalf("the restored database does not hold people: %q", listed)
+	}
+
+	redumped, errs, status := into.run("dump")
+	if status != 0 {
+		t.Fatalf("dump: %s", errs)
+	}
+	for _, name := range []string{"Alice", "Bob", "Carol"} {
+		if !strings.Contains(redumped, name) {
+			t.Errorf("the restored database lost %q: %q", name, redumped)
+		}
+	}
+}
+
+// TestRestoreGarbageLeavesNoVisibleDatabase is task A6's own debt, measured
+// rather than trusted: feed restore every shape of garbage the task names
+// and one more (an end line that lies), and check what is actually left --
+// not just the exit status, which a status-only check cannot tell apart
+// from any other reason this command fails (house-rules.md's "when every
+// failing path yields the same status, the status distinguishes nothing").
+//
+// The disk-level check here is `ls`'s own output, not a byte comparison of
+// the .sapedb file: internal/pager.Pager.Write lands pages on disk before
+// Commit ever runs (see its own doc comment, "It is not part of the
+// database until Commit says so"), so a rejected restore can and does leave
+// the file a few pages larger than an untouched one -- that growth is the
+// pager's documented, harmless "interrupted" pages (Pager.Interrupted),
+// reused by the next transaction, not a partial database. A byte-identical
+// check would fail on that harmless growth and miss the actual question,
+// which is entirely about what `ls` can see: a collection, a non-empty log,
+// or the word "restored".
+func TestRestoreGarbageLeavesNoVisibleDatabase(t *testing.T) {
+	dumped := buildRealDump(t)
+	lines := strings.Split(strings.TrimRight(dumped, "\n"), "\n")
+	if len(lines) < 5 {
+		t.Fatalf("buildRealDump produced too few lines to cut up: %d", len(lines))
+	}
+
+	// endLiesAboutLSN keeps the real header and body and forges only the
+	// last line's own claim about the change the dump ends at, so this is a
+	// dump whose header and body are genuine and only the end disagrees
+	// with the header it started next to.
+	endLiesAboutLSN := strings.Join(lines[:len(lines)-1], "\n") + "\n" +
+		strings.Replace(lines[len(lines)-1], `"lsn":4`, `"lsn":999`, 1) + "\n"
+
+	garbage := map[string]string{
+		"200 random bytes":                                      string(randomJunk(t, 200)),
+		"empty stdin":                                           "",
+		"valid json, wrong shape entirely":                      `{"foo":"bar"}` + "\n",
+		"header only, stream cut before any collection":         lines[0] + "\n",
+		"cut mid-document, no end line":                         strings.Join(lines[:len(lines)-2], "\n") + "\n",
+		"end line present but lies about the document count":    strings.Replace(dumped, `"documents":3`, `"documents":5`, 1),
+		"end line present but lies about the change it ends at": endLiesAboutLSN,
+		"garbage appended after a real end line":                dumped + `{"kind":"document","collection":"people","document":{"name":"Ghost"}}` + "\n",
+	}
+
+	for name, junk := range garbage {
+		t.Run(name, func(t *testing.T) {
+			setup := start(t)
+			out, errs, status := setup.runWith(nil, junk, "restore")
+			if status == 0 {
+				t.Fatalf("garbage restored without complaint: stdout %q", out)
+			}
+			if strings.Contains(out, "restored to change") {
+				t.Fatalf("a rejected restore claimed success on stdout: %q", out)
+			}
+			if errs == "" {
+				t.Fatal("a rejected restore printed nothing about why")
+			}
+
+			listed, lsErrs, lsStatus := setup.run("ls")
+			if lsStatus != 0 {
+				t.Fatalf("ls after a rejected restore: %s", lsErrs)
+			}
+			if strings.Contains(listed, "collection") {
+				t.Errorf("a rejected restore left a visible collection: %q", listed)
+			}
+			if !strings.Contains(listed, "log 0..0") {
+				t.Errorf("a rejected restore left the log at %q, not empty", listed)
+			}
+		})
+	}
+}
+
+// randomJunk is unstructured bytes with no relation to JSON at all -- the
+// crudest garbage restore can be handed, and the case most likely to be
+// mistaken for "obviously" refused without ever being run.
+func randomJunk(t *testing.T, n int) []byte {
+	t.Helper()
+	buf := make([]byte, n)
+	if _, err := crand.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf
+}
+
+// TestApplyDoesNotPrintWhatItRollsBack is task A7's own shape one layer up
+// from the database: a later file failing must not leave stdout claiming an
+// earlier file's collection was declared, because the whole multi-file run
+// is one transaction (apply's own doc comment: db.Commit is called once, at
+// the end of the loop over every file) and that whole transaction is what
+// actually failed. Unlike case 6 in
+// TestARejectedArgumentLeavesTheDiskExactlyAsItFound, the failure here is
+// NOT caught by checkApply's pre-open pass: checkApply only checks that
+// every file reads and decodes as JSON DisallowUnknownFields accepts, and
+// {"operations":[...{"collection":"nowhere"...}]} does. The failure only
+// happens once db.DeclareOperation actually looks "nowhere" up, which is
+// well after the first file's collection has already been declared into
+// this transaction.
+func TestApplyDoesNotPrintWhatItRollsBack(t *testing.T) {
+	setup := start(t)
+	ok := setup.write("people.json", `{"collections":[{"name":"people","key":{"path":"id","type":"string","auto":"ulid"}}]}`)
+	bad := setup.write("bad.json", `{"operations":[{"name":"a.all","collection":"nowhere","action":"scan","index":"_key","limit":1}]}`)
+
+	out, errs, status := setup.run("apply", ok, bad)
+	if status == 0 {
+		t.Fatal("apply ran despite the second file naming a collection nothing ever declared")
+	}
+	if !strings.Contains(errs, `no such collection: "nowhere"`) {
+		t.Errorf("the complaint does not name the missing collection: %q", errs)
+	}
+	if strings.Contains(out, "collection") {
+		t.Errorf("apply printed %q for a run that was never committed", out)
+	}
+
+	listed, errs, status := setup.run("ls")
+	if status != 0 {
+		t.Fatalf("ls: %s", errs)
+	}
+	if strings.Contains(listed, "collection") {
+		t.Errorf("the failed apply left a collection on disk: %q", listed)
+	}
+
+	// And the database this left behind is genuinely empty, not "people"
+	// half-declared: applying the good file alone afterwards must declare it
+	// fresh, not report it unchanged.
+	out, errs, status = setup.run("apply", ok)
+	if status != 0 {
+		t.Fatalf("apply of the good file alone: %s", errs)
+	}
+	if !strings.Contains(out, "collection people") {
+		t.Errorf("the collection was not declared fresh after the failed run: %q", out)
 	}
 }
