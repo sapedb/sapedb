@@ -441,7 +441,10 @@ func (s *Store) validateOperation(operation *Operation) error {
 
 	// earlier is the steps already declared, so a reference forward or to
 	// itself is refused where it is written rather than found at call time.
-	earlier := map[string]bool{}
+	// It carries what each of those steps offers the ones after it rather
+	// than a bare "it exists", because a reference to a step has to be
+	// checked against something: see stepOffer.
+	earlier := map[string]stepOffer{}
 
 	check := func(term Term, wanted string, where string) error {
 		sources := 0
@@ -459,11 +462,26 @@ func (s *Store) validateOperation(operation *Operation) error {
 		}
 
 		if term.Step != "" {
-			if !earlier[term.Step] {
+			offer, comes := earlier[term.Step]
+			if !comes {
 				return fmt.Errorf("%w: %s uses step %q, which does not come before it", ErrDeclaration, where, term.Step)
 			}
 			if term.Field != "key" {
 				return fmt.Errorf("%w: %s asks a step for %q, and a step gives only its key", ErrDeclaration, where, term.Field)
+			}
+			// The same check the argument branch below makes, for the same
+			// reason, and it used to be missing here: this branch returned as
+			// soon as it had found the step, so a key taken from a step was
+			// the one value in a declaration whose type nobody compared with
+			// the place it was being used. A step reading a collection keyed
+			// by string, handing that key to a step on a collection keyed by
+			// number, was accepted at declare time and then sorted somewhere
+			// else in the index at call time — an empty answer with no error,
+			// which is exactly the outcome the comment below says this kind of
+			// check exists to prevent.
+			if wanted != TypeAny && offer.keyType != TypeAny && offer.keyType != wanted {
+				return fmt.Errorf("%w: %s is a %s, and step %q gives a %s",
+					ErrDeclaration, where, wanted, term.Step, offer.keyType)
 			}
 			return nil
 		}
@@ -610,14 +628,15 @@ func (s *Store) validateOperation(operation *Operation) error {
 		}
 		for i := range operation.Steps {
 			step := &operation.Steps[i]
-			if err := s.validateStep(step, i, earlier, check); err != nil {
+			offer, err := s.validateStep(step, i, earlier, check)
+			if err != nil {
 				return err
 			}
 			if step.Name != "" {
-				if earlier[step.Name] {
+				if _, taken := earlier[step.Name]; taken {
 					return fmt.Errorf("%w: two steps are called %q", ErrDeclaration, step.Name)
 				}
-				earlier[step.Name] = true
+				earlier[step.Name] = offer
 			}
 		}
 
@@ -706,9 +725,20 @@ func checkDirection(operation *Operation, parameters map[string]Parameter,
 	return nil
 }
 
-// validateStep checks one step of a batch against the collection it names.
-func (s *Store) validateStep(step *Step, at int, earlier map[string]bool,
-	check func(Term, string, string) error) error {
+// stepOffer is what one step of a batch offers the steps that come after it.
+//
+// keyType is the declared type of the key a later step may name with
+// {"step": ..., "field": "key"}. It is the whole reason this is a struct
+// rather than the bool it used to be: a step reference is a value like any
+// other, and a value has to be checked against the place it is used.
+type stepOffer struct {
+	keyType string
+}
+
+// validateStep checks one step of a batch against the collection it names, and
+// says what it offers the steps after it.
+func (s *Store) validateStep(step *Step, at int, earlier map[string]stepOffer,
+	check func(Term, string, string) error) (stepOffer, error) {
 
 	where := fmt.Sprintf("step %d", at+1)
 	if step.Name != "" {
@@ -717,29 +747,30 @@ func (s *Store) validateStep(step *Step, at int, earlier map[string]bool,
 
 	collection, err := s.Collection(step.Collection)
 	if err != nil {
-		return fmt.Errorf("%s: %w", where, err)
+		return stepOffer{}, fmt.Errorf("%s: %w", where, err)
 	}
+	offer := stepOffer{keyType: collection.spec.Key.Type}
 
 	switch step.Action {
 	case ActionGet, ActionUpdate, ActionDelete:
 		if step.Key == nil {
-			return fmt.Errorf("%w: %s says which document by its key", ErrDeclaration, where)
+			return stepOffer{}, fmt.Errorf("%w: %s says which document by its key", ErrDeclaration, where)
 		}
 		if err := check(*step.Key, collection.spec.Key.Type, where+" key"); err != nil {
-			return err
+			return stepOffer{}, err
 		}
 		if step.Action == ActionUpdate && len(step.Set) == 0 {
-			return fmt.Errorf("%w: %s changes nothing", ErrDeclaration, where)
+			return stepOffer{}, fmt.Errorf("%w: %s changes nothing", ErrDeclaration, where)
 		}
 		for field, term := range step.Set {
 			if err := check(term, TypeAny, where+" field "+field); err != nil {
-				return err
+				return stepOffer{}, err
 			}
 		}
 
 	case ActionInsert, ActionPut:
 		if len(step.Document) == 0 {
-			return fmt.Errorf("%w: %s writes nothing", ErrDeclaration, where)
+			return stepOffer{}, fmt.Errorf("%w: %s writes nothing", ErrDeclaration, where)
 		}
 		for field, term := range step.Document {
 			wanted := TypeAny
@@ -747,33 +778,33 @@ func (s *Store) validateStep(step *Step, at int, earlier map[string]bool,
 				wanted = collection.spec.Key.Type
 			}
 			if err := check(term, wanted, where+" field "+field); err != nil {
-				return err
+				return stepOffer{}, err
 			}
 		}
 		if _, writes := step.Document[collection.spec.Key.Path]; !writes && collection.spec.Key.Auto == "" {
-			return fmt.Errorf("%w: %q does not generate keys, so %s must write %q",
+			return stepOffer{}, fmt.Errorf("%w: %q does not generate keys, so %s must write %q",
 				ErrDeclaration, collection.spec.Name, where, collection.spec.Key.Path)
 		}
 
 	default:
-		return fmt.Errorf("%w: %s does %q, which a step cannot do", ErrDeclaration, where, step.Action)
+		return stepOffer{}, fmt.Errorf("%w: %s does %q, which a step cannot do", ErrDeclaration, where, step.Action)
 	}
 
 	for i, condition := range step.Require {
 		if condition.Path == "" {
-			return fmt.Errorf("%w: %s condition %d names no field", ErrDeclaration, where, i+1)
+			return stepOffer{}, fmt.Errorf("%w: %s condition %d names no field", ErrDeclaration, where, i+1)
 		}
 		if (condition.Equals == nil) == !condition.Absent {
-			return fmt.Errorf("%w: %s condition %d must be either a value it equals or absent", ErrDeclaration, where, i+1)
+			return stepOffer{}, fmt.Errorf("%w: %s condition %d must be either a value it equals or absent", ErrDeclaration, where, i+1)
 		}
 		if condition.Equals != nil {
 			if err := check(*condition.Equals, TypeAny, fmt.Sprintf("%s condition on %q", where, condition.Path)); err != nil {
-				return err
+				return stepOffer{}, err
 			}
 		}
 	}
 
-	return nil
+	return offer, nil
 }
 
 // scanFields is the fields of the index an operation walks, primary key
