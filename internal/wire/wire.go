@@ -47,6 +47,10 @@ type Client struct {
 	reader  *protocol.Reader
 	next    uint32
 	welcome Welcome
+
+	// requestTimeout bounds every request this connection sends after the
+	// TCP/TLS dial, including the handshake itself. See Options.RequestTimeout.
+	requestTimeout time.Duration
 }
 
 // Welcome is what the server said when the connection opened.
@@ -66,7 +70,50 @@ type Options struct {
 	// connection that quietly falls back to plaintext is worse than one that
 	// refuses.
 	Insecure bool
-	Timeout  time.Duration
+
+	// Timeout bounds the TCP/TLS dial only. Zero means 10 seconds — Dial
+	// picks a default rather than letting a stalled connect hang forever,
+	// because the alternative there (an address nothing answers) is a mistake
+	// worth failing fast on.
+	Timeout time.Duration
+
+	// RequestTimeout bounds each request this connection sends AFTER the
+	// dial — the handshake included, since that is itself a request/response
+	// pair over the socket Dial just opened. Timeout has no say over it: once
+	// TCP/TLS finishes connecting, nothing before this field ever called
+	// SetReadDeadline or used a context, so a peer that accepts a connection
+	// and then never answers — accidentally (a stuck server) or on purpose —
+	// hung every caller forever, and because a session on the server side
+	// holds the database's lock for the duration of a call (see
+	// internal/server's per-database mutex), one such client could pin a
+	// whole database.
+	//
+	// Zero leaves that hang exactly as it was: no deadline is set, matching
+	// what every Options{} zero value has done until now. That is a
+	// deliberate choice, not an oversight matching Timeout's own default-to-
+	// 10s habit — a caller doing a legitimate long-running request through
+	// this client (sapedb dump/restore's bulk read, a large batch, an
+	// operator shell command with no natural bound) must not start failing
+	// the moment this field exists, just because it was never given a value.
+	// The trap this closes is opt-in: a caller that wants liveness against a
+	// stuck or hostile peer sets RequestTimeout; one that does not is exactly
+	// as exposed as before, no better and no worse. See CHANGELOG.md.
+	//
+	// Applied with net.Conn.SetDeadline before every request (wire.go's
+	// request(), which is Send+Read of one frame), not only SetReadDeadline:
+	// a peer that stops draining what this client writes — a large batch
+	// payload against a socket nobody is reading from the other end — can
+	// wedge a Write the same way a silent peer wedges a Read, and both ends
+	// of one request are one round trip a caller waits on as a single unit.
+	// A context.Context was the other option considered: it would let a
+	// caller cancel a request already in flight from outside, which
+	// SetDeadline cannot. Nothing in this package's callers needs that today
+	// — the CLI and shell issue one blocking request at a time and have
+	// nothing else running that would cancel it — so the deadline is the
+	// smaller change for the problem actually measured (task 0070 §2). If a
+	// caller ever needs mid-flight cancellation, that is the point to
+	// revisit this, not a reason to add unused surface now.
+	RequestTimeout time.Duration
 }
 
 // Dial opens a connection string and does the handshake.
@@ -89,7 +136,10 @@ func Dial(where connection.Connection, options Options) (*Client, error) {
 		return nil, err
 	}
 
-	client := &Client{conn: conn, reader: protocol.NewReader(conn).Accept(protocol.Version)}
+	client := &Client{
+		conn: conn, reader: protocol.NewReader(conn).Accept(protocol.Version),
+		requestTimeout: options.RequestTimeout,
+	}
 
 	frame, err := client.request(protocol.Hello, map[string]any{
 		"account":  where.Account,
@@ -211,7 +261,23 @@ func (c *Client) ask(kind protocol.Type, body any) ([]byte, error) {
 }
 
 // request sends one frame and reads the one that answers it.
+//
+// The deadline covers both: a peer that stops reading can wedge the write
+// half of this round trip exactly as a peer that stops answering wedges the
+// read half, and a caller waiting on request() is waiting on the pair of
+// them as one unit. Set fresh on every call (not once, in Dial) so that one
+// slow request does not leave a deadline in the past for every request after
+// it — and cleared (a zero time.Time) when RequestTimeout is 0, in case this
+// connection ever reuses a net.Conn that already has one set.
 func (c *Client) request(kind protocol.Type, body any) (protocol.Frame, error) {
+	if c.requestTimeout > 0 {
+		if err := c.conn.SetDeadline(time.Now().Add(c.requestTimeout)); err != nil {
+			return protocol.Frame{}, err
+		}
+	} else if err := c.conn.SetDeadline(time.Time{}); err != nil {
+		return protocol.Frame{}, err
+	}
+
 	id, err := c.send(kind, body)
 	if err != nil {
 		return protocol.Frame{}, err

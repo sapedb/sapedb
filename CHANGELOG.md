@@ -48,6 +48,34 @@ recorded, so its absence is not a claim that nothing changed before it.
   README.md's "Every write is a transaction" paragraph for what this does
   and does not change about read/write ordering.
 
+- `wire.Options.RequestTimeout` (task 0070 §2): `Options.Timeout` only ever
+  bounded the TCP/TLS dial (`net.DialTimeout` / `tls.DialWithDialer`) — once
+  connected, nothing in `internal/wire` called `SetReadDeadline` or used a
+  context, so a peer that accepted a connection and then never answered (a
+  stuck server, or one just built wrong) hung every request forever,
+  handshake included. Because a session on the server side holds its
+  database's lock for the duration of a call, one such client could pin a
+  whole database. `RequestTimeout`, when set, is applied with
+  `net.Conn.SetDeadline` around each request's send-and-read pair
+  (`Client.request`, `internal/wire/wire.go`) — both directions, not only the
+  read, because a peer that stops draining what this client writes can wedge
+  the write half of a round trip the same way a silent peer wedges the read
+  half. Default is `0`, meaning no deadline is set — the exact hang this
+  closes is opt-in to close, not opt-out: a caller doing a legitimate
+  long-running request through this client (`sapedb dump`/`restore`'s bulk
+  read, a large batch, an operator-shell command with no natural bound) must
+  not start failing the moment this field exists just because nobody set it.
+  This is a deliberate departure from `Timeout`'s own zero-means-10-seconds
+  habit, made because the two fields bound different things: a dial with no
+  address to reach is always a mistake worth failing fast on, while a slow
+  *request* against a database that is genuinely doing the work asked of it
+  is not. Guarded by
+  `TestRequestTimeoutBoundsAHandshakeAgainstASilentPeer` (a listener that
+  accepts and then never answers, proving the timeout fires) paired with
+  `TestRequestTimeoutStillSucceedsAgainstAnOrdinaryServer` (the same path
+  against a real, answering server, run first so the timeout test is not
+  trusted on its own) in `internal/wire/wire_test.go`.
+
 ### Fixed
 
 - `apply` (`internal/cli/cli.go`) printed `collection NAME` and
