@@ -194,6 +194,83 @@ func TestAStepThatTakesAValueFromAManyRowStepIsRefused(t *testing.T) {
 	}
 }
 
+// The same rule, on the one shape where nothing else would catch it — and the
+// reason this test exists next to the one above rather than instead of it.
+//
+// A leg that may return many rows is, today, always a leg that hands back no
+// key: a scan and a count and a totals all read without leaving one behind. So
+// the test above is caught twice over, and it would stay red even if N4 were
+// deleted — which makes it useless for saying whether N4 is still doing
+// anything. A batch is the exception that separates the two: its ceiling is
+// the sum over its steps, and it leaves behind the key its last step made. So
+// this shape — a leg with a ceiling of two and a key to give — is refused by
+// N4 and by nothing else, which is what makes it the measurement of N4 rather
+// than of the rule next to it.
+//
+// This asymmetry is worth saying out loud rather than leaving in a test name:
+// what stops fan-out today is mostly that Field is limited to "key" and that
+// the many-row actions produce none. N4 is the rule that will still be
+// standing on the day somebody widens Field, which is the obvious next
+// request. It is written against the ceiling for exactly that reason.
+func TestAStepThatTakesAKeyFromAManyRowBatchStepIsRefused(t *testing.T) {
+	s := composed(t)
+
+	// A batch of two gets: ceiling 2, and it leaves its last get's key behind.
+	if _, err := s.DeclareOperation(Operation{
+		Name: "items.two_of", Collection: "items", Action: ActionBatch,
+		Input: []Parameter{
+			{Name: "a", Type: TypeString, Required: true},
+			{Name: "b", Type: TypeString, Required: true},
+		},
+		Steps: []Step{
+			{Action: ActionGet, Collection: "items", Key: &Term{Arg: "a"}},
+			{Action: ActionGet, Collection: "items", Key: &Term{Arg: "b"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The control, on the same path and before the refusal: a one-row leg with
+	// a key IS allowed to hand it on. If this stops being true the refusal
+	// below stops meaning anything.
+	if _, err := s.DeclareOperation(Operation{
+		Name: "catalog.one_then_read", Collection: "items", Action: ActionBatch,
+		Input: []Parameter{{Name: "a", Type: TypeString, Required: true}},
+		Limit: 10,
+		Steps: []Step{
+			{Name: "one", Action: ActionGet, Collection: "items", Key: &Term{Arg: "a"}},
+			{Name: "read", Operation: "items.get", Version: 1,
+				With: map[string]Term{"id": {Step: "one", Field: "key"}}},
+		},
+	}); err != nil {
+		t.Fatalf("a one-row leg handing its key on was refused, so nothing below is a measurement of the ceiling rule: %v", err)
+	}
+
+	_, err := s.DeclareOperation(Operation{
+		Name: "catalog.two_then_read", Collection: "items", Action: ActionBatch,
+		Input: []Parameter{
+			{Name: "a", Type: TypeString, Required: true},
+			{Name: "b", Type: TypeString, Required: true},
+		},
+		Limit: 10,
+		Steps: []Step{
+			{Name: "pair", Operation: "items.two_of", Version: 1,
+				With: map[string]Term{"a": {Arg: "a"}, "b": {Arg: "b"}}},
+			{Name: "read", Operation: "items.get", Version: 1,
+				With: map[string]Term{"id": {Step: "pair", Field: "key"}}},
+		},
+	})
+	if !errors.Is(err, ErrDeclaration) {
+		t.Fatalf("a step took a key from a two-row leg and the declaration was accepted — the ceiling rule is not doing anything: %v", err)
+	}
+	if !strings.Contains(err.Error(), `step "pair"`) || !strings.Contains(err.Error(), "2 rows") {
+		t.Fatalf("the refusal must name the leg and how many rows it may return: %v", err)
+	}
+}
+
 // Branching. "Skip this leg if the condition is false" has no spelling here,
 // and this is the measurement of why: a condition that fails takes the whole
 // transaction with it, including what an earlier step already wrote. It is an
@@ -456,7 +533,16 @@ func TestAComposedOperationWhoseLegsOutgrowItsLimitIsRefused(t *testing.T) {
 
 	_, err := s.DeclareOperation(over)
 	if !errors.Is(err, ErrDeclaration) {
-		t.Fatalf("legs adding up to 51 under a limit of 50 were not refused: %v", err)
+		// Say what was lost, not only that a refusal did not arrive: the
+		// number the declaration prints has stopped being the ceiling, which
+		// is the whole of what this rule is for.
+		stored, found, lookup := s.Operation(over.Name, 0)
+		reach := -1
+		if lookup == nil && found {
+			reach, _ = s.ceiling(stored, newCosts())
+		}
+		t.Fatalf("legs adding up to 51 under a limit of 50 were not refused (%v) — %q is now stored declaring a limit of %d with a real ceiling of %d, so the number a reader sees is a lie",
+			err, over.Name, over.Limit, reach)
 	}
 	if !strings.Contains(err.Error(), "51") || !strings.Contains(err.Error(), "50") {
 		t.Fatalf("the refusal must print both numbers — the sum it worked out and the limit that was declared: %v", err)
