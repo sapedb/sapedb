@@ -200,7 +200,13 @@ func TestNoSecondCopyOfThePathRule(t *testing.T) {
 		}
 		name := entry.Name()
 		if entry.IsDir() {
-			if name == ".git" || name == "node_modules" || name == "dist" {
+			// Every dot-directory, not a list of the ones seen so far: this
+			// is the rule `go build ./...` uses, and a list is a thing that
+			// goes stale silently. Measured the day it did — a worktree under
+			// .claude/ put a second copy of the whole tree here, and this test
+			// reported every file in it as a second copy of the path rule,
+			// which is true and useless.
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "dist" {
 				return filepath.SkipDir
 			}
 			return nil
