@@ -32,13 +32,13 @@
       "type": 5,
       "id": 42,
       "json": {
-        "op": "orders.list",
+        "command": "orders.list",
         "args": {
           "limit": 2
         }
       },
-      "payloadHex": "7b226f70223a226f72646572732e6c697374222c2261726773223a7b226c696d6974223a327d7d",
-      "frameHex": "01050000002a000000277b226f70223a226f72646572732e6c697374222c2261726773223a7b226c696d6974223a327d7d"
+      "payloadHex": "7b22636f6d6d616e64223a226f72646572732e6c697374222c2261726773223a7b226c696d6974223a327d7d",
+      "frameHex": "01050000002a0000002c7b22636f6d6d616e64223a226f72646572732e6c697374222c2261726773223a7b226c696d6974223a327d7d"
     },
     {
       "name": "event, id 0 — nobody asked for it",
