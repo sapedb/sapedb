@@ -7,6 +7,37 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Changed
 
+- `Spec.Indexes` (a collection's declared indexes, as `Collection.Spec()` and
+  the `Catalogue` a `catalogue` explore answers with both hand it out) now
+  marshals as `[]` for a collection declared with no indexes, instead of
+  `null`. Same policy as `Catalogue.Collections` above, applied one level
+  down: `Declare` never allocates an `Indexes` slice for a collection that
+  has none, and the field carries no `omitempty`, so the first index a caller
+  ever asked about for that collection came back `null`. Fixed at
+  `Collection.Spec()` (`internal/store/collection.go`) — what `Declare` and
+  `writeSpec` put on disk is untouched; only the copy handed to a caller is
+  normalized.
+
+- `Endpoint.Terms` (the `from`/`to` of a declared scan or rollup read) now
+  marshals as `[]` rather than `null` for an endpoint declared with no bound
+  at all — `{"exclusive": true}` with no `"terms"` key, a legal way to write
+  "unbounded here" in a hand-authored `schema.json`. `Explore`'s own path
+  never produced this shape (it always builds `Terms` with `make`), but
+  `DeclareOperation` decodes an `Operation` straight from a file, and `Terms`
+  carries no `omitempty`. Fixed in `validateOperation`
+  (`internal/store/ops.go`), which both `DeclareOperation` and `Explore` run
+  before anything is marshaled or stored, so this also reaches what gets
+  written to disk for any operation declared from now on.
+
+- Measured, not changed: `internal/server`'s wire request field `writeId`
+  and `internal/store`'s persisted log field `write_id` carry the same value
+  (a write's idempotency key) but are not the same field wearing two
+  spellings — one is what a client sends, the other is what the change log
+  keeps, and the TypeScript client already keeps them apart the same way.
+  Documented at the `call.WriteID` struct tag in `internal/server/server.go`
+  so a future "make it consistent" pass does not merge two things that were
+  never meant to match.
+
 - `Catalogue.Collections` (the `here.collections` field a `catalogue` explore
   answers with) now marshals as `[]` on a database with nothing declared yet,
   instead of `null`. Before this change, `WhatIsHere` started from a nil

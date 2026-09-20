@@ -573,7 +573,19 @@ type call struct {
 	Command   string         `json:"command"`
 	Version   int            `json:"version,omitempty"`
 	Arguments map[string]any `json:"args,omitempty"`
-	WriteID   string         `json:"writeId,omitempty"`
+
+	// WriteID travels the wire as writeId — the client's own spelling for a
+	// field it sends. It is carried into store.Caller.WriteID and from there
+	// into store.Attribution.WriteID for the change log, where the tag is
+	// write_id instead. That is not the drift it looks like: writeId names
+	// this request field, write_id names the persisted log field the same
+	// value ends up in, and the two have never been expected to share a
+	// spelling — request fields here follow the client's naming, disk-
+	// persisted fields follow store's underscored one (see NextIndexID next
+	// to it in spec.go). Measured for task 0068 §1 Phase A: the TypeScript
+	// client already keeps them apart the same way (writeId on
+	// InvokeOptions/the request body, write_id on Change.by).
+	WriteID string `json:"writeId,omitempty"`
 
 	// DBName and Signature are how an account-wide connection says which
 	// database this call is for, and proves it may.

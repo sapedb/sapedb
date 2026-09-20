@@ -249,6 +249,24 @@ type Endpoint struct {
 	Exclusive bool   `json:"exclusive,omitempty"`
 }
 
+// normalizeEndpoint keeps Terms a wire-safe []Term rather than the nil Go
+// hands back when a hand-authored schema.json's "from"/"to" omits "terms"
+// entirely (e.g. `{"exclusive": true}`) — a legal way to declare a bound end
+// with no constraint, reached only through DeclareOperation, since Explore's
+// own asOperation always builds an Endpoint with make() (see endpoint() in
+// explore.go). Terms carries no `omitempty`, so an unnormalized nil marshals
+// as JSON `null`: an Operation declared that way and later read back through
+// WhatIsHere or Explored.Draft would hand a caller `"terms":null` where the
+// TypeScript mirror's own comment promises "never absent" and reaches
+// straight for `.map()`. Called from validateOperation so both stores
+// (DeclareOperation) and runs (Explore) see the same normalized shape before
+// anything is marshaled.
+func normalizeEndpoint(e *Endpoint) {
+	if e != nil && e.Terms == nil {
+		e.Terms = []Term{}
+	}
+}
+
 // Caller is the context of one call: who is running the operation, what they
 // hold, and their own id for the write if it is one.
 type Caller struct {
@@ -383,6 +401,13 @@ func (s *Store) Operations() ([]Operation, error) {
 }
 
 func (s *Store) validateOperation(operation *Operation) error {
+	// Every declared scan/rollup Endpoint gets here before it is stored
+	// (DeclareOperation) or run (Explore), so normalizing here reaches both
+	// paths and reaches it before json.Marshal ever sees the operation. See
+	// normalizeEndpoint.
+	normalizeEndpoint(operation.From)
+	normalizeEndpoint(operation.To)
+
 	if err := usableName(operation.Name); err != nil {
 		return fmt.Errorf("operation name: %w", err)
 	}

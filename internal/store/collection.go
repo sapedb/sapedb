@@ -18,7 +18,23 @@ type Collection struct {
 }
 
 // Spec is the declaration this collection is running.
-func (c *Collection) Spec() Spec { return c.spec }
+//
+// Indexes is normalized to a non-nil, possibly-empty slice here rather than
+// wherever a Spec is installed: a collection declared with no indexes at all
+// keeps c.spec.Indexes nil (Declare never has a reason to allocate one), and
+// Spec.Indexes carries no `omitempty` — so, unpatched, the very first index a
+// caller ever asks about for that collection reads back as JSON `null`, the
+// same shape WhatIsHere used to hand back for an empty Catalogue.Collections
+// before that was fixed. This mirrors that fix at the level below it: the
+// database itself, and what gets written to it with writeSpec, is untouched;
+// only the copy handed to a caller is normalized.
+func (c *Collection) Spec() Spec {
+	spec := c.spec
+	if spec.Indexes == nil {
+		spec.Indexes = []Index{}
+	}
+	return spec
+}
 
 // into is the tree this key's document lives in.
 //

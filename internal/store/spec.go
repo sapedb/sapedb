@@ -54,8 +54,16 @@ var (
 
 // Spec is a collection as it was declared.
 type Spec struct {
-	Name    string  `json:"name"`
-	Key     Key     `json:"key"`
+	Name string `json:"name"`
+	Key  Key    `json:"key"`
+
+	// Indexes carries no `omitempty`, on purpose: a collection with no
+	// indexes still has to say so, not leave the key out. It marshals as `[]`
+	// rather than `null`, the same policy this whole public surface follows
+	// for `Catalogue.Collections` — one policy for the surface, chosen so a
+	// caller never has to learn, index by index, which of two shapes an empty
+	// one is. The one place that used to disagree is Collection.Spec(),
+	// which normalizes a nil c.spec.Indexes on the way out; see its comment.
 	Indexes []Index `json:"indexes"`
 
 	// Partition divides this collection into files, decided by the key. Nil
