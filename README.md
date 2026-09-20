@@ -64,6 +64,35 @@ may require the document to already be in a particular state. That last part is
 optimistic locking, written down in the schema where somebody deciding whether
 to trust an operation can read it.
 
+**Composed operations.** A step of a batch may name an operation that is
+already declared instead of a collection, which is how a vocabulary gets built
+out of itself rather than by adding an action for every shape somebody wants:
+
+```
+operation "catalog.page", action batch, limit 51
+  input:  shelf (string)
+  step "items":  operation "items.on_shelf@1"       with { shelf }   -- scan,   at most 50
+  step "total":  operation "items.total_on_shelf@1" with { shelf }   -- totals, at most 1
+```
+
+A page and that page's true total, in one call and therefore in one state —
+which is what this buys. Done as two calls they are two states, and a write
+landing between them is how a user is shown "51 results" over a page of 50
+that just lost one. It also saves K−1 round trips for K steps, which is a
+number you read off the declaration. It is **not** a claim about speed: every
+measurement so far is on loopback, where the saving is the size of the
+difference between two runs of the same measurement, and nobody has measured
+it across a network.
+
+A step runs exactly once, and that is enforced rather than intended: a
+reference pins a version, so a reference cycle cannot be written down and a
+redeclaration of the callee cannot move what the caller costs; a term may only
+take a value from a step that returns exactly one row, so "once for each row
+the other step returned" — a loop — has no spelling; and the limit above must
+cover the sum of its steps' limits. That last rule is why the ceiling of a
+composed operation **at any depth is the number written in it**, not a product
+and not a sum you have to work out. The same one number a flat scan declares.
+
 **Every write is a transaction.** Atomic across the document, every index
 entry and the log line; durable before the answer goes back; isolated because
 only one write runs against a database at a time. Which is why there is no

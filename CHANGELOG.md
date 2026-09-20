@@ -7,6 +7,83 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- Composed operations: a step of a batch may name an operation that is already
+  declared, instead of a collection. `Step` gains `operation`, `version` and
+  `with`; a step does one or the other and never both, and writing both is
+  refused when it is declared.
+
+  It exists to answer one objection without answering it with a query
+  language. "You are missing a `scan-with-total`, when do I get one?" — never;
+  you compose it out of two declarations you already have:
+
+  ```
+  operation "catalog.page", action batch, limit 51
+    input:  shelf (string)
+    step "items":  operation "items.on_shelf@1"      with { shelf }   -- scan,   ceiling 50
+    step "total":  operation "items.total_on_shelf@1" with { shelf }  -- totals, ceiling 1
+  ```
+
+  Five refusals hold it up, all of them made when the operation is declared
+  and none of them a check made while it runs:
+
+  - the reference pins a version, and that version already exists. Version
+    zero means "the latest" everywhere else in the package, and that is the
+    one meaning it may not have here: a reference that followed the newest
+    would make the limit printed above stop being true the moment somebody
+    else redeclared `items.on_shelf`, and nobody would be told. Pinning is
+    also what makes recursion impossible to write down rather than something
+    that has to be detected — a version is only ever handed out going up, and
+    a pinned reference only resolves backwards, so the reference graph is a
+    DAG by construction and there is no maximum depth.
+  - the callee is itself a declaration this store validated when it was made,
+    so its own ceiling is already true of it.
+  - the callee's ceiling is readable from its declaration at all.
+  - a term that names another step may only name one whose ceiling is 1. This
+    is the rule that decides what this feature is: taking a value from a step
+    that may hand back many rows is "run this once for each of them", which is
+    a for loop written in JSON.
+  - a composed operation declares a limit, and the ceilings of its steps add
+    up to no more than that limit.
+
+  That last one is what makes a declaration readable by a person. By induction
+  over the declarations it names, the ceiling of a composed operation **at any
+  depth is the number written in that operation** — not a product, and not a
+  sum the reader has to work out: the same one number a flat scan declares,
+  meaning the same thing. Measured rather than argued by
+  `TestTheCeilingOfAComposedOperationAtAnyDepthIsTheLimitItDeclares`
+  (`internal/store/compose_test.go`), which builds a tower three levels deep
+  where a fan-out reading would be 50 to the eighth power and the ceiling is
+  the 400 the top declares.
+
+  What this buys is **atomicity** and a **composable** vocabulary, and it
+  saves **K−1 round trips** for a composed operation of K steps — a count read
+  off the declaration. It is not sold as faster and nothing here says it is:
+  task 0069 measured both places a saving could come from, and one of them
+  (fsync) a batch already saves with nothing further for composing to take,
+  while the other came to 0.099–0.131 ms on loopback, which is the size of the
+  difference between two runs of the same measurement. Nobody has measured it
+  across a real network. Until somebody has, the words are atomic, composable
+  and fewer round trips.
+
+  What it does *not* do, written here rather than discovered: rows from every
+  step land in one flat `Result.Rows` in step order and nothing in the list
+  says which step a row came from, which is what a batch of plain steps has
+  always done. A `count` may not be a step — its answer is a number and a
+  composed answer has one `Count` field for its rows, so the number would be
+  paid for and dropped; read a `totals`, whose answer is a row. Scopes are the
+  union and are checked when the operation is declared: `allowed()` only ever
+  sees the operation a caller named, so without that rule composing would be a
+  way round it.
+
+  End to end on a running daemon, over one connection that was never dropped:
+  `TestAComposedOperationIsDeclaredOnARunningDaemonAndAnsweredInOneCall`
+  (`declare_live_test.go`).
+
+  **The TypeScript client's `Step` does not carry the three new fields.**
+  `fixtures/frames.json` is unchanged — no fixture case carries a step — but
+  `@ecosy/sapedb` cannot build or read a composed declaration until its own
+  `Step` is widened, and nothing compares the two.
+
 - A `Declare` frame (type 13) on the protocol: an operation can now be
   declared on a database that is already being served, without stopping the
   server. Before it there was no path at all —
@@ -148,6 +225,25 @@ recorded, so its absence is not a claim that nothing changed before it.
   trusted on its own) in `internal/wire/wire_test.go`.
 
 ### Fixed
+
+- A key taken from an earlier step was the one value in a declaration whose
+  type nobody compared with the place it was used. `check()`
+  (`validateOperation`, `internal/store/ops.go`) has always compared an
+  `{"arg": ...}` term's declared type against the position it sits in, and its
+  own comment says why: "an argument whose type does not fit where it is used
+  would sort somewhere else in the index, and the caller would get an empty
+  answer with no error." The `{"step": ..., "field": "key"}` branch returned
+  before reaching that line. So a batch whose first step read a collection
+  keyed by string and whose second handed that key to a collection keyed by
+  number was accepted when it was declared, and produced exactly the outcome
+  that comment describes every time it ran.
+
+  Both doors now go through the same comparison, measured side by side in
+  `internal/store/steptype_test.go` — the argument door that was already shut,
+  a control showing a key of the right type still flows between steps and the
+  result really is stored under it, and the door this closes. Nothing narrows:
+  a step's key in a position declared `any`, which is every `Require`
+  condition, is still accepted.
 
 - `apply` (`internal/cli/cli.go`) printed `collection NAME` and
   `operation NAME version N` to stdout as each declaration was decided,
