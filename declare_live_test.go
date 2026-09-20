@@ -198,6 +198,14 @@ func seedTheCollection(t *testing.T, dir string) string {
 			Name:   "by_author",
 			Fields: []store.Field{{Path: "author", Type: store.TypeString, Missing: store.MissingSkip}},
 		}},
+		// Declared here for the same reason the index is: a collection is not
+		// declarable over the wire, and the composed-operation test below
+		// needs a rollup to read a real total out of.
+		Rollups: []store.Rollup{{
+			Name:  "per_author",
+			Group: []store.Field{{Path: "author", Type: store.TypeString, Missing: store.MissingSkip}},
+			Count: true,
+		}},
 	}); err != nil {
 		release()
 		_ = srv.Close()
@@ -408,5 +416,170 @@ func TestAnOlderVersionIsStillCallableThroughThePublicPackage(t *testing.T) {
 
 	if daemon.ProcessState != nil {
 		t.Fatalf("the daemon exited during the test: %v", daemon.ProcessState)
+	}
+}
+
+// TestAComposedOperationIsDeclaredOnARunningDaemonAndAnsweredInOneCall is the
+// end-to-end measurement of task 0070's composed operation, and it is
+// deliberately the same shape as the Declare test at the top of this file:
+// one sapedbd process, started once and never signalled, one connection, and
+// every assertion made through this package's own client over a socket.
+//
+// The subject is the thing composing was built to answer — "you are missing a
+// scan-with-total, when do I get one?" A page of a shelf and that shelf's true
+// total arrive together, out of two operations declared a moment earlier, over
+// a connection that stayed open the whole time. Nothing measured here is
+// measured with a command that ships with the product.
+//
+// What it does not measure is speed, and it says so rather than staying quiet:
+// the comparison at the bottom counts CALLS, which is a number read off the
+// declarations. Nobody has measured this across a real network, so nothing
+// here claims a duration.
+func TestAComposedOperationIsDeclaredOnARunningDaemonAndAnsweredInOneCall(t *testing.T) {
+	dir := t.TempDir()
+	signature := seedTheCollection(t, dir)
+
+	daemon, address := startDaemon(t, dir)
+	pid := daemon.Process.Pid
+
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, err := Dial(Connection{
+		Account: "acme", Password: wrapperPassword, Host: host, Port: port,
+		DBName: "main", Signature: signature,
+	}, Options{Insecure: true, Timeout: 10 * time.Second, RequestTimeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("dialling the daemon: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Operate(liveSecret); err != nil {
+		t.Fatalf("proving the server secret: %v", err)
+	}
+
+	// The control that makes every failure below legible.
+	if _, err := client.WhatIsHere(); err != nil {
+		t.Fatalf("the connection cannot even read the catalogue: %v", err)
+	}
+
+	// 1. The vocabulary: three flat operations, declared live.
+	add, err := client.Declare(Operation{
+		Name: "notes.add", Collection: "notes", Action: store.ActionInsert,
+		Input: []Parameter{
+			{Name: "body", Type: store.TypeString, Required: true},
+			{Name: "author", Type: store.TypeString, Required: true},
+		},
+		Document: map[string]Term{"body": {Arg: "body"}, "author": {Arg: "author"}},
+	})
+	if err != nil || add.Version != 1 {
+		t.Fatalf("declaring notes.add: %+v %v", add, err)
+	}
+	byAuthor, err := client.Declare(Operation{
+		Name: "notes.by_author", Collection: "notes", Action: store.ActionScan,
+		Index: "by_author",
+		Input: []Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+		From:  &Endpoint{Terms: []Term{{Arg: "author"}}},
+		To:    &Endpoint{Terms: []Term{{Arg: "author"}}},
+		Limit: 10,
+	})
+	if err != nil || byAuthor.Version != 1 {
+		t.Fatalf("declaring notes.by_author: %+v %v", byAuthor, err)
+	}
+	perAuthor, err := client.Declare(Operation{
+		Name: "notes.total_by_author", Collection: "notes", Action: store.ActionTotals,
+		Rollup: "per_author",
+		Input:  []Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+		From:   &Endpoint{Terms: []Term{{Arg: "author"}}},
+		To:     &Endpoint{Terms: []Term{{Arg: "author"}}},
+		Limit:  1,
+	})
+	if err != nil || perAuthor.Version != 1 {
+		t.Fatalf("declaring notes.total_by_author: %+v %v", perAuthor, err)
+	}
+
+	for _, body := range []string{"one", "two", "three"} {
+		if _, err := client.Invoke("notes.add", map[string]any{"body": body, "author": "ann"}); err != nil {
+			t.Fatalf("writing a note: %v", err)
+		}
+	}
+	if _, err := client.Invoke("notes.add", map[string]any{"body": "elsewhere", "author": "bob"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. The composed operation itself, declared over the same connection,
+	//    pinned to the two versions that came back above.
+	composed, err := client.Declare(Operation{
+		Name: "notes.page", Collection: "notes", Action: store.ActionBatch,
+		Input: []Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+		Limit: 11,
+		Steps: []Step{
+			{Name: "page", Operation: "notes.by_author", Version: byAuthor.Version,
+				With: map[string]Term{"author": {Arg: "author"}}},
+			{Name: "total", Operation: "notes.total_by_author", Version: perAuthor.Version,
+				With: map[string]Term{"author": {Arg: "author"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("declaring a composed operation over the wire: %v", err)
+	}
+	if composed.Version != 1 {
+		t.Fatalf("notes.page came back at version %d, want 1", composed.Version)
+	}
+	// The declaration came back carrying the fields that make it composed,
+	// which is what says the wire did not quietly drop them on the way.
+	if len(composed.Steps) != 2 ||
+		composed.Steps[0].Operation != "notes.by_author" || composed.Steps[0].Version != 1 ||
+		composed.Steps[0].With["author"].Arg != "author" {
+		t.Fatalf("the stored declaration lost its composed fields: %+v", composed.Steps)
+	}
+
+	// 3. Call it. One Invoke, one answer, one state.
+	result, err := client.Invoke("notes.page", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatalf("invoking a composed operation declared a moment ago: %v", err)
+	}
+	if len(result.Rows) != 4 {
+		t.Fatalf("got %d rows, want ann's 3 notes and 1 total: %+v", len(result.Rows), result.Rows)
+	}
+	for i, row := range result.Rows[:3] {
+		if row["author"] != "ann" {
+			t.Fatalf("row %d is not ann's: %+v", i, row)
+		}
+	}
+	if got := result.Rows[3]["count"]; got != float64(3) {
+		t.Fatalf("the total says %v, want 3: %+v", got, result.Rows[3])
+	}
+
+	// 4. The same answer out of the flat operations: two calls where the
+	//    composed one took one. A count, not a duration.
+	page, err := client.Invoke("notes.by_author", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, err := client.Invoke("notes.total_by_author", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Rows)+len(total.Rows) != len(result.Rows) {
+		t.Fatalf("one composed call answered %d rows and the two flat calls answered %d + %d",
+			len(result.Rows), len(page.Rows), len(total.Rows))
+	}
+
+	// 5. And the daemon is the one this test started, still up, never
+	//    signalled — so all of the above happened on a running server.
+	if daemon.Process.Pid != pid {
+		t.Fatalf("the daemon's pid changed from %d to %d", pid, daemon.Process.Pid)
+	}
+	if daemon.ProcessState != nil {
+		t.Fatalf("the daemon exited during the test: %v", daemon.ProcessState)
+	}
+	if err := daemon.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("the daemon is no longer running: %v", err)
 	}
 }

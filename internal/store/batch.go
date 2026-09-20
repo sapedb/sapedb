@@ -36,7 +36,7 @@ import (
 // be remembered is a rule that will be forgotten, so it is checked instead.
 
 // runBatch does every step, or none of them.
-func (s *Store) runBatch(caller Caller, operation Operation, values map[string]any, result *Result) error {
+func (s *Store) runBatch(by Attribution, operation Operation, values map[string]any, result *Result) error {
 	if s.pages.Pending() {
 		return fmt.Errorf("%w: commit or roll back what is already written before running %q",
 			ErrUncommitted, operation.Name)
@@ -85,13 +85,35 @@ func (s *Store) runBatch(caller Caller, operation Operation, values map[string]a
 		panic(r)
 	}()
 
-	by := Attribution{
-		Operation: operation.Name,
-		Version:   operation.Version,
-		Actor:     caller.Actor,
-		WriteID:   caller.WriteID,
+	if err := s.runSteps(by, operation, values, result); err != nil {
+		// The whole transaction goes, not the step. A batch that left its
+		// first two writes behind would be the thing it exists to prevent.
+		if abandoned := s.Rollback(); abandoned != nil {
+			return fmt.Errorf("%w (and abandoning it failed: %v)", err, abandoned)
+		}
+		result.Rows, result.Changed, result.Count = nil, 0, 0
+		return err
 	}
 
+	return nil
+}
+
+// runSteps does every step in order and stops at the first that fails.
+//
+// It does not abandon anything. There is one transaction in flight and it
+// belongs to whoever started it: runBatch above, for the operation a caller
+// named, and — for a step that calls an operation which is itself a batch —
+// the runBatch further out. A nested batch that rolled back would throw away
+// the steps that ran before it, silently and only when something had already
+// gone wrong, which is the case the whole no-savepoints rule exists to keep
+// out of this file.
+//
+// The guard at the top of runBatch is left behind for the same reason. "A
+// batch refuses to start on top of uncommitted work" is true of the outermost
+// one and false of a called one by construction: the steps before it have
+// written, so there is pending work, and that is exactly what was meant to
+// happen.
+func (s *Store) runSteps(by Attribution, operation Operation, values map[string]any, result *Result) error {
 	// What each named step produced, for the steps that come after it.
 	produced := map[string]any{}
 
@@ -105,12 +127,6 @@ func (s *Store) runBatch(caller Caller, operation Operation, values map[string]a
 
 		key, err := s.runStep(by, step, values, produced, result)
 		if err != nil {
-			// The whole transaction goes, not the step. A batch that left its
-			// first two writes behind would be the thing it exists to prevent.
-			if abandoned := s.Rollback(); abandoned != nil {
-				return fmt.Errorf("%s: %w (and abandoning it failed: %v)", where, err, abandoned)
-			}
-			result.Rows, result.Changed, result.Count = nil, 0, 0
 			return fmt.Errorf("%s: %w", where, err)
 		}
 
@@ -123,9 +139,46 @@ func (s *Store) runBatch(caller Caller, operation Operation, values map[string]a
 	return nil
 }
 
+// runCalled runs the operation a step names, inside the transaction that is
+// already open, and folds what it produced into the answer being built.
+//
+// The rows of every step land in one flat list, in step order, which is what
+// a batch of plain steps has always done with the rows its get steps produce.
+// Nothing in that list says which step a row came from. That is a real limit
+// and it is written here rather than discovered: a composed read is for
+// answers whose shapes are told apart by what is in them — a page and its
+// total — and not for ones that need a label to be read at all.
+func (s *Store) runCalled(by Attribution, callee Operation, values map[string]any, into *Result) (any, error) {
+	sub := Result{Operation: callee.Name, Version: callee.Version}
+
+	var err error
+	if callee.Action == ActionBatch {
+		err = s.runSteps(by, callee, values, &sub)
+	} else {
+		err = s.runInline(by, callee, values, &sub)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	into.Rows = append(into.Rows, sub.Rows...)
+	into.Count = len(into.Rows)
+	into.Changed += sub.Changed
+	if sub.Truncated {
+		// A called scan that stopped at its limit is a partial answer, and the
+		// caller of the operation that called it is the one who has to know.
+		into.Truncated = true
+	}
+	return sub.Key, nil
+}
+
 // runStep does one step, after checking what it requires.
 func (s *Store) runStep(by Attribution, step *Step, values map[string]any,
 	produced map[string]any, result *Result) (any, error) {
+
+	if step.Operation != "" {
+		return s.runComposedStep(by, step, values, produced, result)
+	}
 
 	collection, err := s.Collection(step.Collection)
 	if err != nil {
@@ -225,6 +278,56 @@ func (s *Store) runStep(by Attribution, step *Step, values map[string]any,
 	}
 
 	return nil, fmt.Errorf("%w: a step cannot %q", ErrDeclaration, step.Action)
+}
+
+// runComposedStep does one step that calls an operation.
+//
+// The version is the one the declaration pinned, so this reads the exact
+// declaration that was validated when this operation was declared — not
+// whichever one is newest now. That is the difference between the limit this
+// operation prints and a number that used to be true.
+//
+// The attribution is the outermost operation's, unchanged: what a log records
+// is the call somebody made, and the steps it turned into are the declaration
+// of that call rather than separate events.
+func (s *Store) runComposedStep(by Attribution, step *Step, values map[string]any,
+	produced map[string]any, result *Result) (any, error) {
+
+	callee, found, err := s.Operation(step.Operation, step.Version)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("%w: %q version %d", ErrNoOperation, step.Operation, step.Version)
+	}
+
+	// The arguments this step declared, resolved the same way a document field
+	// is — an optional argument whose value was not passed to the outer call
+	// falls away rather than arriving as a null, which is what lets an
+	// optional "since" stay optional through a composed call.
+	passing := make(map[string]any, len(step.With))
+	for name, term := range step.With {
+		if term.Arg != "" {
+			if _, given := values[term.Arg]; !given {
+				continue
+			}
+		}
+		value, err := resolveIn(term, values, produced)
+		if err != nil {
+			return nil, err
+		}
+		passing[name] = value
+	}
+
+	// bind, not a shortcut past it: the callee's own declaration decides what
+	// its arguments are and what types they have, exactly as it would for a
+	// caller who named it directly.
+	inner, err := bind(callee, passing)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.runCalled(by, callee, inner, result)
 }
 
 // satisfies checks what a step requires of the document it names.

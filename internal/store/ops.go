@@ -201,11 +201,53 @@ type Term struct {
 }
 
 // Step is one part of a batch.
+//
+// A step either touches a collection — Action and Collection, with the fields
+// under them — or calls an operation that is already declared — Operation,
+// Version and With. Never both, and the refusal for writing both is at declare
+// time. The two shapes are one struct because they are one list: the steps of
+// a batch run in order, in one transaction, and which of the two a step is
+// changes nothing about that.
 type Step struct {
 	// Name lets a later step refer to what this one produced.
 	Name       string `json:"name,omitempty"`
-	Action     string `json:"action"`
-	Collection string `json:"collection"`
+	Action     string `json:"action,omitempty"`
+	Collection string `json:"collection,omitempty"`
+
+	// Operation is the name of an already-declared operation this step runs,
+	// and Version is which declaration of it — pinned, never the latest.
+	//
+	// Pinning is not caution, it is what makes two things true that nothing
+	// else here makes true:
+	//
+	//   - The cost this operation declares stays what it says. A reference to
+	//     a bare name would follow the callee to its next version, so the day
+	//     somebody redeclares the callee with a bigger limit, the number
+	//     written in THIS declaration quietly stops being the ceiling. The
+	//     promise this store is built on is that the cost is known before
+	//     anything runs, and a number that changes when a different file
+	//     changes is not that.
+	//   - Recursion cannot be written down. A version is handed out by
+	//     DeclareOperation and only ever goes up, and a pinned reference only
+	//     resolves to a version that already exists — so a@1 referring to b@2
+	//     needs b@2 declared first, and a cycle would need the opposite as
+	//     well. The reference graph is a DAG by construction, the way the
+	//     steps of one batch are already ordered by construction (see earlier,
+	//     in validateOperation). Nothing detects cycles here because nothing
+	//     can build one, and for the same reason there is no maximum depth:
+	//     depth buys no risk that the ceiling rule does not already cover.
+	//
+	// Version is required and must be greater than zero. Zero means "the
+	// latest" everywhere else in this package, and that is exactly the meaning
+	// this field may not have.
+	Operation string `json:"operation,omitempty"`
+	Version   int    `json:"version,omitempty"`
+
+	// With is the arguments handed to that operation, by the names the callee
+	// declares them under. The terms are the ordinary ones — an argument of
+	// the caller, a constant, or an earlier step's key — and the last of those
+	// is the one that is limited: see validateComposedStep.
+	With map[string]Term `json:"with,omitempty"`
 
 	Key      *Term           `json:"key,omitempty"`
 	Document map[string]Term `json:"document,omitempty"`
@@ -469,6 +511,35 @@ func (s *Store) validateOperation(operation *Operation) error {
 			if term.Field != "key" {
 				return fmt.Errorf("%w: %s asks a step for %q, and a step gives only its key", ErrDeclaration, where, term.Field)
 			}
+			// N4, and it is the one rule here that decides what this product
+			// is rather than tidying it up.
+			//
+			// A step runs exactly once. Taking a value from a step that may
+			// hand back many rows is how that stops being true: "run this once
+			// for each row that one returned" is a for loop, written in JSON,
+			// and a for loop is the first half of the expression language this
+			// store exists not to have. The ceiling would stop being a sum and
+			// become a product, and a product of three fifties is a hundred
+			// and twenty five thousand rows behind three numbers none of which
+			// makes a reader look twice.
+			//
+			// Said plainly, because the refusal has to be defensible to
+			// somebody who just hit it: today a step offers one key, so a leg
+			// with a ceiling above one has at best the LAST of its keys to
+			// give, and naming it is ambiguous even before it is dangerous.
+			// The refusal is written against the ceiling rather than against
+			// that ambiguity on purpose. Field is limited to "key" today and
+			// widening it is the obvious next request; a rule keyed to the
+			// ambiguity would fall away the day that happens, silently, and
+			// the loop would arrive with it. This one does not.
+			if offer.ceiling > 1 {
+				return fmt.Errorf("%w: %s names step %q, which may return %d rows — a step runs once, and taking a value from a step that returns more than one row is asking to run once for each of them",
+					ErrDeclaration, where, term.Step, offer.ceiling)
+			}
+			if offer.keyType == "" {
+				return fmt.Errorf("%w: %s names step %q, which hands back no key — a get and a scan both read documents without leaving a key behind, so there is nothing there to take",
+					ErrDeclaration, where, term.Step)
+			}
 			// The same check the argument branch below makes, for the same
 			// reason, and it used to be missing here: this branch returned as
 			// soon as it had found the step, so a key taken from a step was
@@ -626,17 +697,51 @@ func (s *Store) validateOperation(operation *Operation) error {
 		if len(operation.Steps) == 0 {
 			return fmt.Errorf("%w: a batch does nothing", ErrDeclaration)
 		}
+		within := newCosts()
+		total, composed := 0, false
 		for i := range operation.Steps {
 			step := &operation.Steps[i]
-			offer, err := s.validateStep(step, i, earlier, check)
+			offer, err := s.validateStep(step, i, operation, within, check)
 			if err != nil {
 				return err
 			}
+			if step.Operation != "" {
+				composed = true
+			}
+			total += offer.ceiling
 			if step.Name != "" {
 				if _, taken := earlier[step.Name]; taken {
 					return fmt.Errorf("%w: two steps are called %q", ErrDeclaration, step.Name)
 				}
 				earlier[step.Name] = offer
+			}
+		}
+
+		// N5, and it is what makes this readable by a person rather than
+		// merely computable by this function.
+		//
+		// A batch of plain steps has always cost one document per step, and a
+		// reader counts the steps. A batch that calls operations does not: the
+		// cost is somewhere else, in files this one only names. So an
+		// operation that calls one declares its own limit and that limit must
+		// cover the sum — which, by induction over the declarations it names
+		// (each of which was held to the same rule when IT was declared),
+		// makes the ceiling of a composed operation at any depth the number
+		// written in it. Not a product. Not a sum anybody has to work out. The
+		// same one number a flat scan declares, meaning the same thing.
+		//
+		// Only required when a step calls an operation: a plain batch has
+		// never declared a limit and making it start now would refuse every
+		// declaration already written down, to buy a number the reader can
+		// already get by counting.
+		if composed {
+			if operation.Limit <= 0 {
+				return fmt.Errorf("%w: %q calls other operations, so it must declare how many rows it may return — the cost is in declarations this one only names",
+					ErrDeclaration, operation.Name)
+			}
+			if total > operation.Limit {
+				return fmt.Errorf("%w: the steps of %q may return %d rows between them, and it declares a limit of %d",
+					ErrDeclaration, operation.Name, total, operation.Limit)
 			}
 		}
 
@@ -733,11 +838,16 @@ func checkDirection(operation *Operation, parameters map[string]Parameter,
 // other, and a value has to be checked against the place it is used.
 type stepOffer struct {
 	keyType string
+	// ceiling is the most rows this step may hand back, read from what it
+	// declares — one for a step that touches a collection, and the called
+	// operation's own ceiling for a step that calls one. It is what N4 is
+	// asked about (see check, in validateOperation) and what N5 adds up.
+	ceiling int
 }
 
 // validateStep checks one step of a batch against the collection it names, and
 // says what it offers the steps after it.
-func (s *Store) validateStep(step *Step, at int, earlier map[string]stepOffer,
+func (s *Store) validateStep(step *Step, at int, parent *Operation, within *costs,
 	check func(Term, string, string) error) (stepOffer, error) {
 
 	where := fmt.Sprintf("step %d", at+1)
@@ -745,11 +855,19 @@ func (s *Store) validateStep(step *Step, at int, earlier map[string]stepOffer,
 		where = fmt.Sprintf("step %q", step.Name)
 	}
 
+	if step.Operation != "" {
+		return s.validateComposedStep(step, where, parent, within, check)
+	}
+
 	collection, err := s.Collection(step.Collection)
 	if err != nil {
 		return stepOffer{}, fmt.Errorf("%s: %w", where, err)
 	}
-	offer := stepOffer{keyType: collection.spec.Key.Type}
+
+	// Every action a step may take touches exactly one document, which is why
+	// a step has never needed a limit of its own and why the cost of a plain
+	// batch is read by counting its steps.
+	offer := stepOffer{keyType: collection.spec.Key.Type, ceiling: 1}
 
 	switch step.Action {
 	case ActionGet, ActionUpdate, ActionDelete:

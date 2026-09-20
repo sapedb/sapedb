@@ -13,8 +13,8 @@ import (
 // TestEveryIndexedFieldListReadIsOnTheList is the structural half of task
 // 0054 — the case table above (lockstep_test.go) only proves the lockstep
 // property holds at the sites that exist TODAY. It says nothing about a
-// SEVENTEENTH place that starts indexing into Fields/Terms/Group next
-// month (the list below has exactly 16 entries — Reviewer 0054 measured
+// EIGHTEENTH place that starts indexing into Fields/Terms/Group next
+// month (the list below has exactly 17 entries — Reviewer 0054 measured
 // that an earlier draft of this comment said "twelfth"/"thirteenth" here,
 // which was simply wrong arithmetic against the list's own length, not a
 // claim about the code).
@@ -25,7 +25,7 @@ import (
 // Steps, Indexes, Rollups) by a loop-shaped index name (i, at, spread, idx),
 // records which function each match falls inside, and requires that set of
 // functions to equal EXACTLY the list below — no fewer, no more. A
-// SEVENTEENTH reader appearing without a matching line added here fails
+// EIGHTEENTH reader appearing without a matching line added here fails
 // this test; a reader disappearing (say, because a function was deleted)
 // also fails it, so the list cannot go stale in either direction without
 // someone noticing.
@@ -76,7 +76,8 @@ var knownIndexedListReaders = map[string]string{
 	"store.entriesForIndex":   "encodes one index entry field by field: index.Fields[i].encoding(), and names index.Fields[i].Path on failure; also reads the spread field by its own index",
 	"store.index":             "finds a declared index by name, walking c.spec.Indexes by index",
 	"store.rollup":            "finds a declared rollup by name, walking c.spec.Rollups by index",
-	"store.runBatch":          "reaches each batch step's own address by index: &operation.Steps[i]",
+	"store.ceiling":           "adds up the ceilings of a composed operation's steps, reaching each step's own address by index: &operation.Steps[i]",
+	"store.runSteps":          "reaches each batch step's own address by index: &operation.Steps[i] — was runBatch's own loop until a step could call an operation and the loop had to be reachable without runBatch's guards",
 	"store.sameRollup":        "compares two rollups' Group and Sum element by element, by index",
 	"store.sameShape":         "compares two indexes' Fields and Include element by element, by index",
 	"store.scanAcross":        "the mutant this task's debt names directly: Terms[i]/Fields[i].Path per field of a partitioned index",
@@ -164,7 +165,7 @@ func TestEveryIndexedFieldListReadIsOnTheList(t *testing.T) {
 	}
 	for name, sites := range found {
 		if _, ok := knownIndexedListReaders[name]; !ok {
-			t.Errorf("%s reads a list by index at %v and is NOT on the known list — a new reader of Fields/Terms/Group/etc, or a rename of one already there; add it with a reason, after checking it does what the other 16 do", name, sites)
+			t.Errorf("%s reads a list by index at %v and is NOT on the known list — a new reader of Fields/Terms/Group/etc, or a rename of one already there; add it with a reason, after checking it does what the other 17 do", name, sites)
 		}
 	}
 }

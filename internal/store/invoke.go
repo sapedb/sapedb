@@ -37,11 +37,6 @@ func (s *Store) perform(caller Caller, operation Operation, arguments map[string
 		return Result{}, err
 	}
 
-	collection, err := s.Collection(operation.Collection)
-	if err != nil {
-		return Result{}, err
-	}
-
 	result := Result{Operation: operation.Name, Version: operation.Version}
 	by := Attribution{
 		Operation: operation.Name,
@@ -67,115 +62,8 @@ func (s *Store) perform(caller Caller, operation Operation, arguments map[string
 		}
 	}
 
-	switch operation.Action {
-	case ActionBatch:
-		if err := s.runBatch(caller, operation, values, &result); err != nil {
-			return Result{}, err
-		}
-
-	case ActionGet:
-		key, err := resolve(*operation.Key, values)
-		if err != nil {
-			return Result{}, err
-		}
-		document, found, err := collection.Get(key)
-		if err != nil {
-			return Result{}, err
-		}
-		if found {
-			result.Rows = []map[string]any{project(document, operation.Projection)}
-			result.Count = 1
-		}
-
-	case ActionTotals:
-		within, err := bounds(operation, values)
-		if err != nil {
-			return Result{}, err
-		}
-		err = collection.Totals(operation.Rollup, within, func(row Totals) bool {
-			if len(result.Rows) >= operation.Limit {
-				result.Truncated = true
-				return false
-			}
-			result.Rows = append(result.Rows, rowOf(row))
-			result.Count = len(result.Rows)
-			return true
-		})
-		if err != nil {
-			return Result{}, err
-		}
-
-	case ActionScan, ActionCount:
-		within, err := bounds(operation, values)
-		if err != nil {
-			return Result{}, err
-		}
-		if err := s.run(collection, operation, within, &result); err != nil {
-			return Result{}, err
-		}
-
-	case ActionInsert, ActionPut:
-		document, err := build(operation.Document, values)
-		if err != nil {
-			return Result{}, err
-		}
-		if operation.Action == ActionInsert {
-			if key, carries := document[collection.spec.Key.Path]; carries && key != nil {
-				if _, taken, err := collection.Get(key); err != nil {
-					return Result{}, err
-				} else if taken {
-					return Result{}, fmt.Errorf("%w: %v in %q", ErrExists, key, collection.spec.Name)
-				}
-			}
-		}
-		key, err := collection.PutBy(by, document)
-		if err != nil {
-			return Result{}, err
-		}
-		result.Key = key
-		result.Changed = 1
-
-	case ActionUpdate:
-		key, err := resolve(*operation.Key, values)
-		if err != nil {
-			return Result{}, err
-		}
-		document, found, err := collection.Get(key)
-		if err != nil {
-			return Result{}, err
-		}
-		if !found {
-			break
-		}
-		changes, err := build(operation.Set, values)
-		if err != nil {
-			return Result{}, err
-		}
-		for field, value := range changes {
-			document[field] = value
-		}
-		if _, err := collection.PutBy(by, document); err != nil {
-			return Result{}, err
-		}
-		result.Key = key
-		result.Changed = 1
-
-	case ActionDelete:
-		key, err := resolve(*operation.Key, values)
-		if err != nil {
-			return Result{}, err
-		}
-		removed, err := collection.DeleteBy(by, key)
-		if err != nil {
-			return Result{}, err
-		}
-		result.Key = key
-		if removed {
-			result.Changed = 1
-		}
-
-	default:
-		return Result{}, fmt.Errorf("%w: %q", ErrDeclaration, operation.Action)
+	if err := s.runInline(by, operation, values, &result); err != nil {
+		return Result{}, err
 	}
 
 	// An operation is a transaction, so this is where it ends. Leaving the
@@ -189,6 +77,137 @@ func (s *Store) perform(caller Caller, operation Operation, arguments map[string
 	}
 
 	return result, nil
+}
+
+// runInline does one operation's work into a Result that may already hold what
+// came before it, and does not commit.
+//
+// It is separate from perform so that an operation named by a step of another
+// operation runs down exactly this path and not a second one written beside
+// it. What perform keeps for itself is the part that is true only of the
+// operation a caller named: binding the caller's arguments, answering a repeat
+// of a write id from what the first one did, and committing. A called
+// operation has none of those — its arguments come from a declaration, the
+// write id covers the whole transaction rather than each part of it, and there
+// is one transaction, which is not its to end.
+func (s *Store) runInline(by Attribution, operation Operation, values map[string]any, result *Result) error {
+	collection, err := s.Collection(operation.Collection)
+	if err != nil {
+		return err
+	}
+
+	switch operation.Action {
+	case ActionBatch:
+		if err := s.runBatch(by, operation, values, result); err != nil {
+			return err
+		}
+
+	case ActionGet:
+		key, err := resolve(*operation.Key, values)
+		if err != nil {
+			return err
+		}
+		document, found, err := collection.Get(key)
+		if err != nil {
+			return err
+		}
+		if found {
+			result.Rows = []map[string]any{project(document, operation.Projection)}
+			result.Count = 1
+		}
+
+	case ActionTotals:
+		within, err := bounds(operation, values)
+		if err != nil {
+			return err
+		}
+		err = collection.Totals(operation.Rollup, within, func(row Totals) bool {
+			if len(result.Rows) >= operation.Limit {
+				result.Truncated = true
+				return false
+			}
+			result.Rows = append(result.Rows, rowOf(row))
+			result.Count = len(result.Rows)
+			return true
+		})
+		if err != nil {
+			return err
+		}
+
+	case ActionScan, ActionCount:
+		within, err := bounds(operation, values)
+		if err != nil {
+			return err
+		}
+		if err := s.run(collection, operation, within, result); err != nil {
+			return err
+		}
+
+	case ActionInsert, ActionPut:
+		document, err := build(operation.Document, values)
+		if err != nil {
+			return err
+		}
+		if operation.Action == ActionInsert {
+			if key, carries := document[collection.spec.Key.Path]; carries && key != nil {
+				if _, taken, err := collection.Get(key); err != nil {
+					return err
+				} else if taken {
+					return fmt.Errorf("%w: %v in %q", ErrExists, key, collection.spec.Name)
+				}
+			}
+		}
+		key, err := collection.PutBy(by, document)
+		if err != nil {
+			return err
+		}
+		result.Key = key
+		result.Changed = 1
+
+	case ActionUpdate:
+		key, err := resolve(*operation.Key, values)
+		if err != nil {
+			return err
+		}
+		document, found, err := collection.Get(key)
+		if err != nil {
+			return err
+		}
+		if !found {
+			break
+		}
+		changes, err := build(operation.Set, values)
+		if err != nil {
+			return err
+		}
+		for field, value := range changes {
+			document[field] = value
+		}
+		if _, err := collection.PutBy(by, document); err != nil {
+			return err
+		}
+		result.Key = key
+		result.Changed = 1
+
+	case ActionDelete:
+		key, err := resolve(*operation.Key, values)
+		if err != nil {
+			return err
+		}
+		removed, err := collection.DeleteBy(by, key)
+		if err != nil {
+			return err
+		}
+		result.Key = key
+		if removed {
+			result.Changed = 1
+		}
+
+	default:
+		return fmt.Errorf("%w: %q", ErrDeclaration, operation.Action)
+	}
+
+	return nil
 }
 
 // run walks the declared stretch of the declared index, stopping at the

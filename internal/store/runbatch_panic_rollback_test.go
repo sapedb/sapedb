@@ -65,7 +65,7 @@ func TestRunBatchRollsBackAndRepanicsWhenAStepPanics(t *testing.T) {
 	var result Result
 	panicked := func() (r any) {
 		defer func() { r = recover() }()
-		_ = s.runBatch(Caller{}, op, nil, &result)
+		_ = s.runBatch(Attribution{Operation: op.Name}, op, nil, &result)
 		return nil
 	}()
 
