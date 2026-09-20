@@ -51,6 +51,37 @@ type Client struct {
 	// requestTimeout bounds every request this connection sends after the
 	// TCP/TLS dial, including the handshake itself. See Options.RequestTimeout.
 	requestTimeout time.Duration
+
+	// scopes and grant are what Present was given: a set of scopes and the
+	// signature, made with the server's secret, that makes them worth
+	// something. Held on the connection because they go out with every
+	// Invoke; holding them changes nothing about who may issue them.
+	scopes []string
+	grant  string
+}
+
+// Present attaches a scope grant to this connection, to be sent with every
+// Invoke from here on.
+//
+// The grant is not something this client can make. It is an HMAC under a key
+// derived from the server's own secret, over the account, the database and
+// this exact set of scopes — minted by whoever issues connection strings, at
+// the same time and by the same means. This method only carries it.
+//
+// Which is the whole of why presenting scopes is worth anything: a caller that
+// edits the list invalidates the signature, a caller that copies a signature
+// cannot pair it with a different list, and a caller that has neither cannot
+// make either. Sending an unsigned list of the scopes you would like would be
+// a caller naming its own permissions, which is worth exactly nothing and is
+// why nothing on this wire ever did it.
+//
+// Presenting a grant is not cumulative and not a request: the scopes sent are
+// the ones named here, and the server decides what they are worth by checking
+// the signature against the account and database the call actually reached.
+// Calling it again replaces what was presented; calling it with an empty grant
+// clears it.
+func (c *Client) Present(scopes []string, grant string) {
+	c.scopes, c.grant = scopes, grant
 }
 
 // Welcome is what the server said when the connection opened.
@@ -290,6 +321,11 @@ func (c *Client) InvokeVersion(name string, version int, arguments map[string]an
 	// difference with no meaning that somebody would one day have to explain.
 	if version > 0 {
 		body["version"] = version
+	}
+	// Omitted entirely when nothing was presented, so a client that never
+	// calls Present sends exactly the bytes it sent before grants existed.
+	if c.grant != "" {
+		body["grant"] = map[string]any{"scopes": c.scopes, "sig": c.grant}
 	}
 	payload, err := c.ask(protocol.Invoke, body)
 	if err != nil {

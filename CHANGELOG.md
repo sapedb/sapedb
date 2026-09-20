@@ -68,6 +68,73 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **Scopes can be reached over the wire.** An operation has been able to
+  declare `scopes` for as long as there have been operations, and
+  `store.allowed` has checked them fail-closed the whole time — but nothing on
+  the wire could ever present one. `internal/server` built its `store.Caller`
+  with no `Scopes` at all, over a comment explaining that a caller naming its
+  own permissions has named nothing. The comment was right about the danger and
+  the consequence was that an operation declaring a scope was an operation
+  **nobody could call**: a field that refused everything and permitted nothing,
+  which is not a permission system but a way of disabling an operation by
+  mentioning a word. It also meant the check had never once run end to end, and
+  a security mechanism nothing exercises is one nobody can say works.
+
+  What a caller sends now is not a list of scopes. It is a list **and a
+  signature over it**, made with a key derived from the server's own secret —
+  the same secret that signs connection strings, under a label of its own
+  (`signing.GrantLabel`) so neither can ever be presented as the other. The
+  message signed is `account_id ":" dbname ":" scope[,scope...]`, sorted and
+  de-duplicated, so:
+
+  - a caller cannot mint one, for exactly the reason it cannot mint a
+    connection string: it does not have the secret;
+  - a caller cannot edit the list under a real signature, because the list is
+    inside the message;
+  - a grant minted for one database cannot be presented at another, and one
+    minted for one account cannot be presented by another, even on the same
+    server under the same secret.
+
+  On the wire it is an optional `grant` object on the `invoke` payload:
+  `{"scopes": [...], "sig": "..."}`. Sending none is sending no scopes, so
+  **every existing client keeps working unchanged** and keeps exactly the
+  permissions it had. A grant that does not verify refuses the call outright,
+  with the code `grant` rather than `not_allowed`: a bad credential is a
+  different thing from a missing permission, and a caller whose grant was
+  issued for the wrong database must not be left reading "you need
+  articles:read" about a grant that says `articles:read`.
+
+  New names: `signing.Held`, `signing.Granting`, `signing.Grants`,
+  `signing.GrantLabel`, `signing.ErrScope`; `server.Server.Grant` (which sits
+  next to `Sign` — issuing a grant is the secret holder's job, the same as
+  issuing a connection string, and nothing on the wire reaches it); and
+  `Client.Present` on this module's public client, which takes the surface
+  from 32 names to 33.
+
+  Deliberately **not** a challenge-response like the operator proof. A nonce
+  would stop a grant being replayed and would also require whoever issues
+  grants to be online at the moment of every connection, turning an offline
+  control plane into a request path. A grant is a bearer credential of exactly
+  the same weight as the connection string it travels beside: whoever holds
+  that string can already reach the database, and the grant says what they may
+  do once there.
+
+  Known limits, written here rather than left to be discovered: a grant has
+  **no expiry and no serial number**, so it is good until the secret changes,
+  and withdrawing one scope from one account today means reissuing every
+  connection string on that server. Adding an expiry changes the signed
+  message, which is a change this side and the TypeScript signer make together
+  — so it is not being done halfway now. A scope may contain `:` (every scope
+  this product uses does) and may not contain `,`.
+
+  With this, the scope-union rule composed operations landed with is measured
+  end to end for the first time. In-process it was already true that a parent
+  must ask for every scope its callees ask for; over a socket, the other half
+  of that sentence — "and then a caller that does not hold it is refused at
+  call time" — had never been observed, because nothing could hold one. Both
+  halves now run on one connection in
+  `TestComposingIsNotAWayRoundAScopeOverTheWire` (`internal/server`).
+
 - Composed operations: a step of a batch may name an operation that is already
   declared, instead of a collection. `Step` gains `operation`, `version` and
   `with`; a step does one or the other and never both, and writing both is

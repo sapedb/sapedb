@@ -363,9 +363,17 @@ func TestAnAccountNameCannotBeAPathCompletesWithoutHanging(t *testing.T) {
 	}
 }
 
-// Scopes are not taken from the request, so an operation that declares one
-// cannot be reached over the wire at all yet. Being incomplete in that
-// direction is the safe one.
+// Scopes are still not taken from the request: a caller that presents nothing
+// holds nothing, and an operation that declares a scope is refused to it.
+//
+// This test used to say that such an operation "cannot be reached over the
+// wire at all yet", which was true and is not any more — a caller can now
+// present a grant somebody with the server's secret signed for it. What has
+// not changed is this connection, which presents none. The default is still
+// no scopes, so adding grants took nothing away from any client that does not
+// use them. The other half — the same operation running for a caller that does
+// hold one — is in scope_test.go, which is the pair this one needs to mean
+// anything: on its own, a refusal is also what a broken connection looks like.
 func TestAnOperationThatNeedsAScopeIsRefusedOverTheWire(t *testing.T) {
 	server, address := running(t, false)
 	declare(t, server, "acme", "main")

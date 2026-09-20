@@ -1,12 +1,14 @@
 package wire
 
 import (
+	"errors"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/sapedb/sapedb/internal/connection"
 	"github.com/sapedb/sapedb/internal/server"
+	"github.com/sapedb/sapedb/internal/store"
 )
 
 // TestRequestTimeoutBoundsAHandshakeAgainstASilentPeer is the positive proof
@@ -64,7 +66,6 @@ func TestRequestTimeoutBoundsAHandshakeAgainstASilentPeer(t *testing.T) {
 	t.Logf("Dial against a silent peer returned after %v (RequestTimeout %v)", took, bound)
 }
 
-
 // TestRequestTimeoutStillSucceedsAgainstAnOrdinaryServer is the control case
 // the task's own measurement traps warn to run BEFORE trusting the timeout
 // above: the same RequestTimeout, on the same request path, against a server
@@ -104,5 +105,147 @@ func TestRequestTimeoutStillSucceedsAgainstAnOrdinaryServer(t *testing.T) {
 
 	if client.Welcome().Account != "acme" {
 		t.Fatalf("welcome names account %q, not acme", client.Welcome().Account)
+	}
+}
+
+// TestPresentingAGrantReachesAnOperationThatDeclaresAScope is this client's
+// half of the scope mechanism, against a real server over a real socket.
+//
+// internal/server's own tests drive a hand-rolled client that builds the
+// request struct directly, which measures the server and not this package. The
+// field name, its shape, and the decision to omit it entirely when nothing was
+// presented all live here, and none of them is checked by a test that never
+// sends these bytes.
+//
+// Both halves are on one connection, and the order matters: the operation is
+// refused before Present and answered after it, so what changed is the grant
+// and not anything about the connection, the declaration or the data.
+func TestPresentingAGrantReachesAnOperationThatDeclaresAScope(t *testing.T) {
+	const secret = "the secret only the control plane has"
+	const password = "a-password-of-sixteen-characters-or-more"
+
+	srv, err := server.New(server.Options{Dir: t.TempDir(), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	// A collection is not declarable over the wire, so it is seeded in this
+	// process before anything is measured.
+	db, release, err := srv.Store("acme", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Declare(store.Spec{
+		Name: "notes",
+		Key:  store.Key{Path: "id", Type: store.TypeString, Auto: "ulid"},
+		Indexes: []store.Index{{
+			Name:   "by_author",
+			Fields: []store.Field{{Path: "author", Type: store.TypeString, Missing: store.MissingSkip}},
+		}},
+	}); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	if err := db.Commit(); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	release()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() { _ = srv.Serve(listener) }()
+
+	signature, err := srv.Sign("acme", password, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().(*net.TCPAddr)
+	client, err := Dial(connection.Connection{
+		Account: "acme", Password: password, Host: address.IP.String(), Port: address.Port,
+		DBName: "main", Signature: signature,
+	}, Options{Insecure: true, RequestTimeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	if err := client.Operate(secret); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Declare(store.Operation{
+		Name: "notes.add", Collection: "notes", Action: store.ActionInsert,
+		Input: []store.Parameter{
+			{Name: "body", Type: store.TypeString, Required: true},
+			{Name: "author", Type: store.TypeString, Required: true},
+		},
+		Document: map[string]store.Term{"body": {Arg: "body"}, "author": {Arg: "author"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Declare(store.Operation{
+		Name: "notes.guarded", Collection: "notes", Action: store.ActionScan,
+		Index: "by_author", Scopes: []string{"notes:read"},
+		Input: []store.Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+		From:  &store.Endpoint{Terms: []store.Term{{Arg: "author"}}},
+		To:    &store.Endpoint{Terms: []store.Term{{Arg: "author"}}},
+		Limit: 10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The control: a connection presenting nothing can still do everything it
+	// could before grants existed. If this fails, nothing below is about
+	// scopes.
+	if _, err := client.Invoke("notes.add", map[string]any{"body": "a note", "author": "ann"}); err != nil {
+		t.Fatalf("an unscoped operation failed on a connection presenting nothing: %v", err)
+	}
+
+	// The negative, before Present.
+	refused := &ErrRefused{}
+	if _, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"}); err == nil {
+		t.Fatal("a scoped operation ran for a client presenting no grant")
+	} else if !errors.As(err, &refused) || refused.Code != "not_allowed" {
+		t.Fatalf("refused with %v, want the not_allowed code", err)
+	}
+
+	// The positive, on the same connection, after presenting a grant minted by
+	// whoever holds the secret.
+	grant, err := srv.Grant("acme", "main", []string{"notes:read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Present([]string{"notes:read"}, grant)
+
+	result, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatalf("a scoped operation was refused to a client presenting a real grant: %v", err)
+	}
+	if len(result.Rows) == 0 {
+		t.Fatal("the scoped operation was allowed to run and came back with no rows — an empty answer cannot be told from a refusal nobody reported")
+	}
+
+	// A list this client edits after the fact is a list the signature no
+	// longer covers, and the server says so with the grant code rather than
+	// letting the call go on to fail for some other true-but-wrong reason.
+	client.Present([]string{"notes:read", "notes:write"}, grant)
+	if _, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"}); err == nil {
+		t.Fatal("a client added a scope to a real grant and the call ran")
+	} else if !errors.As(err, &refused) || refused.Code != "grant" {
+		t.Fatalf("refused with %v, want the grant code", err)
+	}
+
+	// Clearing it puts the connection back where it started, which is what
+	// says Present is state on this client and not a one-way door.
+	client.Present(nil, "")
+	if _, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"}); err == nil {
+		t.Fatal("clearing the grant left the scope in place")
+	} else if !errors.As(err, &refused) || refused.Code != "not_allowed" {
+		t.Fatalf("refused with %v, want the not_allowed code", err)
 	}
 }

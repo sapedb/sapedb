@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -183,4 +184,164 @@ func Operates(proof string, secret string, nonce []byte) bool {
 		return false
 	}
 	return hmac.Equal([]byte(strings.ToLower(proof)), []byte(want))
+}
+
+// Holding a scope is a different thing again from operating the server, and a
+// connection string says nothing about it either.
+//
+// An operation may declare `scopes`, and running it means presenting them.
+// Until this existed, nothing on the wire could: internal/server built its
+// store.Caller with no Scopes at all and said so in a comment — "a caller that
+// names its own permissions has none". The comment was right about the danger
+// and wrong about the conclusion. An operation that declares a scope was an
+// operation nobody could call, so `scopes` was a field that refused everything
+// and permitted nothing, which is not a permission system; it is a way of
+// disabling an operation by mentioning a word.
+//
+// What a client sends is therefore not a list of scopes. It is a list of
+// scopes AND a signature over them, made with a key derived from the server's
+// own secret — the same secret that signs connection strings, under a label of
+// its own so the two can never be swapped. A caller cannot mint one, for
+// exactly the reason a caller cannot mint a connection string: it does not
+// have the secret. Whoever issues connection strings issues these, at the same
+// moment, by the same means, offline.
+//
+// The grant names the account and the database as well as the scopes, and all
+// three are signed together. So a grant is not a scope, it is a scope HERE: a
+// grant minted for one database cannot be presented at another, and one minted
+// for one account cannot be presented by another, even against the same server
+// under the same secret.
+//
+// What it deliberately is not is a challenge-response like Operating below. A
+// nonce would stop a grant being replayed, and it would also mean whoever
+// issues grants has to be online at the moment of every connection — which is
+// the opposite of how this product's credentials work, and would turn an
+// offline control plane into a request path. A grant is a bearer credential of
+// exactly the same weight as the connection string it travels beside: anybody
+// holding that string can already reach the database, and the grant says what
+// they may do once there. It is no stronger than the string and no weaker,
+// which is the honest place for it to sit.
+//
+// What it does not have yet, said out loud rather than discovered: an expiry,
+// and any way to withdraw one short of changing the secret. See the note on
+// Held.
+const GrantLabel = "sapedb/scopes:v1"
+
+// ErrScope is a scope this protocol cannot carry: empty, or holding the comma
+// the list is joined with.
+//
+// A scope MAY hold a ":", and the ones this product uses do — "articles:read",
+// "catalog:read". That is safe even though ":" separates the first two fields
+// of the signed message, because those two fields cannot contain one: whatever
+// follows the second ":" is the scope list entire, so there is exactly one way
+// to read a message back into an account, a database and a list. The comma is
+// the one character that would be ambiguous, and it is the one that is banned.
+var ErrScope = errors.New(`sapedb: a scope must not be empty or contain ","`)
+
+// Held is what a grant says: these scopes, for this account, on this database.
+//
+// There is no expiry field and no serial number, which means a grant is good
+// until the secret changes. That is a real limitation and it is written here
+// rather than left to be found: withdrawing one scope from one account today
+// means reissuing every connection string on the server. Adding an expiry is
+// a change to the signed message, so it is a change both this side and the
+// TypeScript signer make together — which is why it is not being done halfway
+// now.
+type Held struct {
+	// AccountID and DBName are the same two fields a connection string signs,
+	// and they are here for the same reason: a credential that does not say
+	// where it is good is good everywhere.
+	AccountID string
+	DBName    string
+	// Scopes is the set granted. Order and repetition do not matter: Granting
+	// sorts and de-duplicates before signing, so the same set is always the
+	// same signature however a caller happens to have written it down.
+	Scopes []string
+}
+
+// scopeList is the canonical form of a set of scopes: sorted, de-duplicated,
+// comma-joined.
+//
+// Canonical rather than as-written because the alternative is a signature that
+// depends on the order of a JSON array, which would make ["read","write"] and
+// ["write","read"] two different grants over one set of permissions — two
+// things to issue, two to withdraw, and a support question nobody can answer
+// from a log.
+func scopeList(scopes []string) (string, error) {
+	seen := make(map[string]bool, len(scopes))
+	unique := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		if scope == "" || strings.Contains(scope, ",") {
+			return "", fmt.Errorf("%w: %q", ErrScope, scope)
+		}
+		if seen[scope] {
+			continue
+		}
+		seen[scope] = true
+		unique = append(unique, scope)
+	}
+	sort.Strings(unique)
+	return strings.Join(unique, ","), nil
+}
+
+// GrantMessage is the exact bytes a grant signs:
+//
+//	account_id ":" dbname ":" scope["," scope...]
+//
+// Unambiguous without length prefixing: account_id and dbname cannot contain a
+// ":", so the first two are fixed by the first two colons and everything after
+// the second one is the scope list entire — which is why a scope is allowed to
+// hold a ":" of its own, as every scope this product uses does. The comma is
+// the only character a scope may not hold.
+//
+// A grant of no scopes is legal and means exactly what it says — the third
+// field is empty. It is worth minting: it is how a caller is told, in one
+// place, that it holds nothing, rather than by every scoped operation refusing
+// it one at a time.
+func GrantMessage(held Held) (string, error) {
+	if err := field(held.AccountID); err != nil {
+		return "", fmt.Errorf("account_id: %w", err)
+	}
+	if err := field(held.DBName); err != nil {
+		return "", fmt.Errorf("dbname: %w", err)
+	}
+	list, err := scopeList(held.Scopes)
+	if err != nil {
+		return "", err
+	}
+	return held.AccountID + ":" + held.DBName + ":" + list, nil
+}
+
+// Granting mints a grant: lower-case hex, 64 characters. For whoever holds the
+// secret, which is whoever issues connection strings.
+//
+// The key is derived under GrantLabel and nothing else — not the server's
+// configured connection-string label. Two labels, two keys: a connection
+// string's signature can never be presented as a grant, and a grant can never
+// be presented as a connection string's signature, whatever either one happens
+// to be signed over.
+func Granting(held Held, secret string) (string, error) {
+	if secret == "" {
+		return "", ErrEmptySecret
+	}
+	message, err := GrantMessage(held)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key(secret, GrantLabel))
+	mac.Write([]byte(message))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// Grants reports whether this signature is the one these scopes have, for this
+// account and this database, under this secret.
+//
+// Constant time, and anything malformed is false rather than an error path of
+// its own — a forged grant is input, not an exception.
+func Grants(signature string, held Held, secret string) bool {
+	want, err := Granting(held, secret)
+	if err != nil {
+		return false
+	}
+	return hmac.Equal([]byte(strings.ToLower(signature)), []byte(want))
 }

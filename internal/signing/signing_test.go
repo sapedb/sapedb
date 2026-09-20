@@ -314,3 +314,159 @@ func TestTheOperatorProofIsTheseExactBytes(t *testing.T) {
 		t.Errorf("the proof for the pinned secret and challenge is now\n  %s\nand was\n  %s", proof, pinned)
 	}
 }
+
+// TestAGrantIsTheOneSetOfScopesForTheOneDatabase is the domain separation a
+// grant lives or dies by.
+//
+// A grant says three things at once — these scopes, this account, this
+// database — and all three are inside the message, so none of them can be
+// changed without the signature failing. The table is what a grant must NOT
+// verify against, and the first row of the test is what it must: a table of
+// nothing but false is also what a Grants that always returns false would
+// produce.
+func TestAGrantIsTheOneSetOfScopesForTheOneDatabase(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	held := Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read", "billing:write"}}
+	signature, err := Granting(held, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signature) != 64 {
+		t.Fatalf("a grant is %d characters, want 64 of lower-case hex", len(signature))
+	}
+
+	// The known-positive. Everything below is a false that only means
+	// something because this is a true.
+	if !Grants(signature, held, secret) {
+		t.Fatal("a grant does not verify against what it was made from — nothing else in this test measures anything")
+	}
+
+	// And the set is a set: written in another order, with a repeat, it is the
+	// same grant.
+	shuffled := Held{AccountID: "acme", DBName: "main",
+		Scopes: []string{"billing:write", "articles:read", "billing:write"}}
+	if !Grants(signature, shuffled, secret) {
+		t.Fatal("the same scopes written in another order were not the same grant")
+	}
+
+	elsewhere := []struct {
+		name string
+		held Held
+	}{
+		{"another database", Held{AccountID: "acme", DBName: "other", Scopes: held.Scopes}},
+		{"another account", Held{AccountID: "rival", DBName: "main", Scopes: held.Scopes}},
+		{"a scope added", Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read", "billing:write", "admin"}}},
+		{"a scope removed", Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read"}}},
+		{"no scopes at all", Held{AccountID: "acme", DBName: "main"}},
+	}
+	refused := 0
+	for _, one := range elsewhere {
+		t.Run(one.name, func(t *testing.T) {
+			if Grants(signature, one.held, secret) {
+				t.Fatalf("a grant made for %+v verified as %+v", held, one.held)
+			}
+			refused++
+		})
+	}
+	if refused != len(elsewhere) {
+		t.Fatalf("%d of %d rows ran", refused, len(elsewhere))
+	}
+
+	// Another secret is another server, whatever the grant says.
+	if Grants(signature, held, "a different secret entirely") {
+		t.Fatal("a grant verified under a secret it was not made with")
+	}
+}
+
+// TestAGrantAndAConnectionStringAreNotInterchangeable is why GrantLabel
+// exists.
+//
+// Both are HMACs under the same secret. If they shared a key, the only thing
+// keeping one from being presented as the other would be the shape of the
+// message — and a message is a string somebody chooses. A label of its own
+// makes them different keys, so the question never gets as far as the message.
+func TestAGrantAndAConnectionStringAreNotInterchangeable(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	// The two messages are deliberately built to be the same bytes: an account
+	// whose "password" is a database name, against a grant of one scope. Under
+	// one key this would be one signature.
+	parts := Parts{AccountID: "acme", Password: "main0000000000000", DBName: "read"}
+	connection, err := Sign(parts, secret, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := Held{AccountID: "acme", DBName: "main0000000000000", Scopes: []string{"read"}}
+	grant, err := Granting(held, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The control: each verifies as itself.
+	if !Verify(connection, parts, secret, "") {
+		t.Fatal("the connection-string signature does not verify as one")
+	}
+	if !Grants(grant, held, secret) {
+		t.Fatal("the grant does not verify as one")
+	}
+
+	message, err := Message(parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grantMessage, err := GrantMessage(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message != grantMessage {
+		t.Fatalf("this test's premise is stale: it means to sign identical bytes two ways and the bytes are %q and %q", message, grantMessage)
+	}
+
+	// Identical bytes, different signatures, and neither passes as the other.
+	if connection == grant {
+		t.Fatal("a connection string's signature and a grant over the same bytes are the same signature — the two are interchangeable")
+	}
+	if Grants(connection, held, secret) {
+		t.Fatal("a connection string's signature verified as a grant")
+	}
+	if Verify(grant, parts, secret, "") {
+		t.Fatal("a grant verified as a connection string's signature")
+	}
+}
+
+// TestWhatAScopeMayBe: a scope may hold a ":" — every scope this product uses
+// does — and may not hold the comma the list is joined with, because that is
+// the one character that would make two different sets the same message.
+func TestWhatAScopeMayBe(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	if _, err := Granting(Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read"}}, secret); err != nil {
+		t.Fatalf("a scope with a colon in it was refused: %v", err)
+	}
+	for _, scope := range []string{"", "a,b"} {
+		if _, err := Granting(Held{AccountID: "acme", DBName: "main", Scopes: []string{scope}}, secret); !errors.Is(err, ErrScope) {
+			t.Errorf("a scope of %q was accepted, want ErrScope: %v", scope, err)
+		}
+	}
+
+	// The ambiguity the comma ban closes, written out: without it, one scope
+	// spelled "a,b" and two scopes "a" and "b" are the same message and so the
+	// same grant.
+	one, err := GrantMessage(Held{AccountID: "acme", DBName: "main", Scopes: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one != "acme:main:a,b" {
+		t.Fatalf("the signed message is %q, want %q", one, "acme:main:a,b")
+	}
+
+	// And a grant with no scopes at all is legal, and is not the same as a
+	// grant of one empty-named scope, which is refused above.
+	if _, err := Granting(Held{AccountID: "acme", DBName: "main"}, secret); err != nil {
+		t.Fatalf("a grant of nothing was refused: %v", err)
+	}
+	if _, err := Granting(Held{AccountID: "acme", DBName: "main"}, ""); !errors.Is(err, ErrEmptySecret) {
+		t.Fatalf("a grant under an empty secret: want ErrEmptySecret, got %v", err)
+	}
+}

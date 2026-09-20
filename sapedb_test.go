@@ -16,7 +16,7 @@ import (
 	"github.com/sapedb/sapedb/internal/store"
 )
 
-// TestTheSurfaceIsExactlyTheseThirtyTwoNames fails when a name is added to this
+// TestTheSurfaceIsExactlyTheseThirtyThreeNames fails when a name is added to this
 // package, removed from it, or renamed. It is not a style rule: every name
 // here is a promise this project cannot take back without breaking somebody's
 // build, so adding one has to be a decision somebody made on purpose, not a
@@ -34,11 +34,14 @@ import (
 // which live in Client's own namespace and so can reuse a package-scope name
 // (Welcome the type alias, Welcome the method) without collision. Task 0068
 // §1.5 counts both: 20 aliases + Parse + Dial + Client + Explored = 24
-// package-scope names, plus 8 methods on Client = 32. It was 30 until Declare
+// package-scope names, plus 9 methods on Client = 33. It was 30 until Declare
 // — the frame that lets an operation be declared on a server that is already
 // running — and then InvokeVersion, which is how a caller reaches the older
-// versions a redeclaration leaves behind, each gave Client a method.
-func TestTheSurfaceIsExactlyTheseThirtyTwoNames(t *testing.T) {
+// versions a redeclaration leaves behind, each gave Client a method. The
+// thirty-third is Present: an operation may declare scopes, and until it
+// existed nothing in this package could present one, so such an operation was
+// one no caller of this client could ever run.
+func TestTheSurfaceIsExactlyTheseThirtyThreeNames(t *testing.T) {
 	wantPackageScope := []string{
 		// The 20 value-type aliases.
 		"Access", "Bound", "Catalogue", "Condition", "Endpoint", "Field",
@@ -52,11 +55,11 @@ func TestTheSurfaceIsExactlyTheseThirtyTwoNames(t *testing.T) {
 	}
 	wantClientMethods := []string{
 		"Welcome", "Operate", "Explore", "WhatIsHere", "Declare",
-		"Invoke", "InvokeVersion", "Close",
+		"Present", "Invoke", "InvokeVersion", "Close",
 	}
 
-	if got, want := len(wantPackageScope)+len(wantClientMethods), 32; got != want {
-		t.Fatalf("this test's own want-lists total %d names, not 32 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
+	if got, want := len(wantPackageScope)+len(wantClientMethods), 33; got != want {
+		t.Fatalf("this test's own want-lists total %d names, not 33 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
 	}
 
 	gotPackageScope, gotMethods := readSurface(t)

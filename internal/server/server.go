@@ -42,6 +42,11 @@ var (
 	ErrName       = errors.New("sapedb/server: that is not a usable account or database name")
 	ErrClosed     = errors.New("sapedb/server: the server is closed")
 	ErrNotAllowed = errors.New("sapedb/server: this connection may not reach that database")
+	// ErrGrant is a grant that does not verify. Refused outright rather than
+	// dropped: a caller that presents a credential and has it silently ignored
+	// finds out by way of every scoped operation refusing it, with nothing
+	// anywhere saying the grant was the problem.
+	ErrGrant = errors.New("sapedb/server: that grant was not issued for this account and database")
 )
 
 // Options are what a server needs to run.
@@ -624,6 +629,31 @@ type call struct {
 	// database this call is for, and proves it may.
 	DBName    string `json:"dbname,omitempty"`
 	Signature string `json:"sig,omitempty"`
+
+	// Grant is the scopes this call presents, and the signature that makes
+	// them worth something. See grant, below, and signing.Held.
+	Grant *grant `json:"grant,omitempty"`
+}
+
+// grant is a set of scopes and the proof that the server's own secret was used
+// to hand them out.
+//
+// The scopes are the caller's words and the signature is not: it is an HMAC
+// under a key derived from the server's secret, over the account, the database
+// and the scopes together. So the list below is not what the caller may do —
+// it is what the caller CLAIMS was granted, and it counts for nothing until
+// signing.Grants agrees. A caller that edits the list invalidates the
+// signature; a caller that copies a signature cannot pair it with a different
+// list; a caller with neither cannot make either.
+//
+// Carried per call rather than once at the handshake, so that one shape works
+// for both connection modes. An account-wide connection already names its
+// database and signs for it on every call, and a grant is bound to a database
+// — so a connection that reaches four databases needs four grants, and there
+// is nowhere at the handshake to put them.
+type grant struct {
+	Scopes    []string `json:"scopes,omitempty"`
+	Signature string   `json:"sig,omitempty"`
 }
 
 func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
@@ -637,12 +667,31 @@ func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	opened := live.opening
+	name := s.reached(live, asked)
 
-	// Scopes are not taken from the request: a caller that names its own
-	// permissions has none. Until a token carries them, an operation that
-	// declares a scope cannot be reached over the wire at all — which is the
-	// safe direction to be incomplete in.
-	caller := store.Caller{Actor: opened.Account, WriteID: asked.WriteID}
+	// Scopes are still not taken from the request, and this is the same rule
+	// the older comment here stated rather than a retreat from it: a caller
+	// that names its own permissions has none. What changed is that a caller
+	// can now name permissions somebody else signed for.
+	//
+	// The list in asked.Grant.Scopes is the caller's words. It becomes scopes
+	// only if signing.Grants agrees that this account, this database and this
+	// exact set were signed together under the server's own secret — the
+	// secret that mints connection strings, under a label of its own. So the
+	// question "may this caller edit the list?" has the same answer as "may
+	// this caller mint a connection string for a database it was never given?"
+	// No, and for the same reason: it does not have the secret.
+	//
+	// Before this, an operation that declared a scope could not be reached
+	// over the wire at all. That was described as being incomplete in the safe
+	// direction, and it was — but it also meant the scope check had never run
+	// end to end against anything, and a security mechanism nothing exercises
+	// is a mechanism nobody can say works.
+	scopes, err := s.granted(live, asked, name)
+	if err != nil {
+		return nil, err
+	}
+	caller := store.Caller{Actor: opened.Account, WriteID: asked.WriteID, Scopes: scopes}
 
 	// Readers share, writers take the database to themselves. Which of the
 	// two this call is cannot be known before the operation is looked up, and
@@ -713,6 +762,51 @@ func (s *Server) reach(live *session, asked call) (*database, error) {
 	}
 	live.verified[asked.DBName] = db
 	return db, nil
+}
+
+// reached is the name of the database a call was for, once reach has said it
+// may have it. A bound connection's is the one it opened with, whatever the
+// call left blank; an account connection's is the one the call named and
+// signed for.
+//
+// Separate from reach because a *database does not carry its own name — the
+// map key does — and a grant has to be checked against a name, not a pointer.
+func (s *Server) reached(live *session, asked call) string {
+	if live.bound != nil {
+		return live.opening.DBName
+	}
+	return asked.DBName
+}
+
+// granted is the scopes a call may present, which is none unless the server's
+// own secret says otherwise.
+//
+// Three answers, and the middle one is the point:
+//
+//   - no grant: no scopes. An operation that declares one is refused, by
+//     store.allowed, in its own words. This is what every caller that has not
+//     been issued a grant gets, including every version of the TypeScript
+//     client written before grants existed, so adding this field takes nothing
+//     away from anybody.
+//   - a grant that does not verify: the call is refused. Not "no scopes" —
+//     refused. A caller whose grant is wrong (issued for another database,
+//     edited, truncated, made up) needs to hear about the grant, and it hears
+//     about nothing if the call goes on to fail somewhere else for a reason
+//     that is true but not the reason.
+//   - a grant that verifies: exactly the scopes in it, and nothing else about
+//     the call is allowed to add to them.
+//
+// Checked against the account this connection proved and the database this
+// call reached, so a grant is never worth more than where it was minted for.
+func (s *Server) granted(live *session, asked call, name string) ([]string, error) {
+	if asked.Grant == nil {
+		return nil, nil
+	}
+	held := signing.Held{AccountID: live.opening.Account, DBName: name, Scopes: asked.Grant.Scopes}
+	if !signing.Grants(asked.Grant.Signature, held, s.options.Secret) {
+		return nil, fmt.Errorf("%w: %q on %q", ErrGrant, live.opening.Account, name)
+	}
+	return asked.Grant.Scopes, nil
 }
 
 // oldFileExt is the database file extension this product used before it was
@@ -908,6 +1002,22 @@ func (s *Server) Sign(account, password, name string) (string, error) {
 		s.options.Secret, s.options.Label)
 }
 
+// Grant mints the signature a set of scopes needs to be worth anything on this
+// server, for whoever is issuing them.
+//
+// It sits next to Sign because it belongs to the same job: issuing a
+// connection string is deciding which database somebody reaches, and issuing a
+// grant is deciding what they may do once there. Both are the secret holder's
+// to make, and neither is anything a caller can do for itself.
+//
+// Note what having this method does NOT mean. A server can mint a grant
+// because a server holds the secret; that is the same reason a server could
+// always mint a connection string for any database it serves. It is not a way
+// for a connection to obtain one — nothing on the wire reaches this.
+func (s *Server) Grant(account, name string, scopes []string) (string, error) {
+	return signing.Granting(signing.Held{AccountID: account, DBName: name, Scopes: scopes}, s.options.Secret)
+}
+
 func write(conn io.Writer, frame protocol.Frame, payload []byte) error {
 	frame.Version = protocol.Version
 	frame.Payload = payload
@@ -953,6 +1063,7 @@ func codeFor(err error) string {
 		{store.ErrArgument, "argument"},
 		{store.ErrNotAllowed, "not_allowed"},
 		{ErrNotOperator, "not_operator"},
+		{ErrGrant, "grant"},
 		{store.ErrExists, "exists"},
 		{store.ErrMissing, "missing"},
 		{store.ErrCondition, "condition"},

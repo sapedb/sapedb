@@ -119,6 +119,24 @@ func (c *Client) Declare(operation Operation) (Operation, error) {
 	return c.inner.Declare(operation)
 }
 
+// Present attaches a scope grant to this connection, sent with every Invoke
+// from here on.
+//
+// An operation may declare scopes, and running it means presenting them. This
+// is not a client asking for permissions: the grant is an HMAC made with the
+// server's own secret, over the account, the database and this exact set of
+// scopes, minted by whoever issues your connection string and handed to you
+// with it. Edit the list and the signature stops matching it; the signature
+// alone is no use with any other list, and neither can be made without the
+// secret.
+//
+// A connection that never calls this presents nothing and holds nothing, which
+// is what every caller did before grants existed. Calling it again replaces
+// what was presented; calling it with an empty grant clears it.
+func (c *Client) Present(scopes []string, grant string) {
+	c.inner.Present(scopes, grant)
+}
+
 // Invoke runs a declared operation, at whichever version is newest.
 func (c *Client) Invoke(name string, arguments map[string]any) (Result, error) {
 	return c.inner.Invoke(name, arguments)
