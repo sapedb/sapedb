@@ -5,3 +5,6 @@ bin/
 dist/
 *.db
 .DS_Store
+
+# Worktrees the agent tooling creates here. Local state, never source.
+.claude/
