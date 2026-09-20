@@ -27,7 +27,7 @@ import (
 //     calls, which begins by calling validateOperation. There is no second
 //     copy of the rules here and nothing is normalised on the way in. That is
 //     the one property this file exists to keep, and it is measured rather
-//     than asserted — see TestDeclareRefusesExactlyWhatApplyRefuses,
+//     than asserted — see TestDeclaringOverTheWireRefusesExactlyWhatApplyRefuses,
 //     TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn and
 //     TestACountDeclaredOverTheWireMustSayHowFarItWalks.
 //
