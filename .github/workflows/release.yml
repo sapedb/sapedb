@@ -1,0 +1,221 @@
+# Builds and, on a real tag, publishes a sapedb release: binaries for every
+# platform in the Makefile's CROSS_PLATFORMS, one checksum file over all of
+# them, and a container image.
+#
+# Two triggers, one job, one set of build steps:
+#
+#   - a push of a tag matching v* is the real release: it publishes.
+#   - workflow_dispatch is the dry run: it runs every build and verification
+#     step below identically, uploads the results as a workflow artifact
+#     (visible only to whoever can see this repository's Actions runs), and
+#     never reaches the publish steps — they are skipped by their own `if:`,
+#     not by a second copy of this file.
+#
+# That "not a second copy" is deliberate. Two workflows meant to agree and
+# written twice are two workflows that will one day disagree, silently — the
+# same trap this repository already paid for once, in the Makefile's STAMP
+# path and the Dockerfile's own hand-written copy of it (see
+# internal/build.Path and TestTheBuildFilesStampTheSymbolThisPackageActuallyExports).
+# Sharing steps here means the dry run is not a rehearsal of the release
+# path — running it IS running the release path, short of the four
+# publishing calls at the bottom, which need a real tag or a registry this
+# workflow has never been allowed to touch.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  # ghcr.io/<owner>/<repo>, lowercased the way GHCR requires. github.repository
+  # is already "owner/repo", so this only has to add the host.
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # 0, not the default shallow clone: git describe needs tags and
+          # history to name a dry run's version, and a shallow clone with no
+          # tags reachable would silently fall back to a bare commit hash,
+          # which is a worse thing to hide than an error.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Matches go.mod's "go 1.24" and the Dockerfile's
+          # "FROM golang:1.24-alpine" on purpose: three places that build this
+          # module, agreeing about which Go builds it.
+          go-version: "1.24"
+
+      # Decides two things this whole workflow hangs off: what VERSION gets
+      # stamped into every artifact, and whether this run is allowed to reach
+      # the publishing steps at the bottom. github.ref_type is "tag" only for
+      # the tag-push trigger above; workflow_dispatch's ref is a branch, so
+      # this is never true for a dry run no matter what somebody names a
+      # branch.
+      - name: Determine version and whether this run publishes
+        id: mode
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            described="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+            echo "version=dryrun-${described}" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print what this run resolved to
+        run: |
+          echo "version:  ${{ steps.mode.outputs.version }}"
+          echo "publish:  ${{ steps.mode.outputs.publish }}"
+          echo "ref_type: ${{ github.ref_type }}"
+          echo "ref_name: ${{ github.ref_name }}"
+          echo "workspace: $GITHUB_WORKSPACE"
+
+      # ---------------------------------------------------------------------
+      # Shared build steps. Everything from here down to "Run the image and
+      # connect to it" runs identically whether this is a dry run or a real
+      # release — that identity is the point, not an accident of ordering.
+      # ---------------------------------------------------------------------
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build every platform's binaries
+        run: make dist-cross VERSION="${{ steps.mode.outputs.version }}"
+
+      - name: Checksums
+        run: make checksums VERSION="${{ steps.mode.outputs.version }}"
+
+      - name: Verify every artifact is stamped, not dev
+        run: make verify-dist VERSION="${{ steps.mode.outputs.version }}" | tee dist/verify-dist-results.txt
+
+      - name: Build the container image
+        run: docker build --build-arg VERSION="${{ steps.mode.outputs.version }}" -t sapedb:ci .
+
+      # A build that succeeds proves the Dockerfile is well-formed. It proves
+      # nothing about whether the thing inside it answers a client, which is
+      # the only claim a database image actually needs to make. So: start it,
+      # dial it with the very binary dist-cross just built for this runner's
+      # own platform (linux/amd64), and read the productVersion the server
+      # names itself in its welcome — not the log line, the wire protocol a
+      # real client uses. Then stop it. --rm means there is nothing left to
+      # remove, and no volume is ever mounted, so there is nothing there to
+      # leak either.
+      - name: Run the image and connect to it
+        run: |
+          set -e
+
+          version="${{ steps.mode.outputs.version }}"
+          secret="release-check-$(date +%s)"
+
+          docker run -d --rm --name sapedb-release-check -p 17433:7433 \
+            -e SAPEDB_SECRET="$secret" \
+            -e SAPEDB_INSECURE=1 \
+            sapedb:ci
+          trap 'docker stop sapedb-release-check >/dev/null 2>&1 || true' EXIT
+
+          # The image has no shell, so there is nothing inside the container
+          # to probe with. Probe the port from the runner instead, with
+          # bash's own /dev/tcp — no curl, no nc, nothing extra to install.
+          ready=""
+          for _ in $(seq 1 30); do
+            if (exec 3<>"/dev/tcp/127.0.0.1/17433") 2>/dev/null; then
+              exec 3<&- 3>&-
+              ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ -z "$ready" ]; then
+            echo "FAIL: sapedb-release-check never opened 127.0.0.1:17433"
+            docker logs sapedb-release-check || true
+            exit 1
+          fi
+
+          binary="dist/sapedb_${version}_linux_amd64"
+          chmod +x "$binary"
+
+          session="$(SAPEDB_SECRET="$secret" SAPEDB_ACCOUNT=acme SAPEDB_DB=main \
+            "./$binary" shell 127.0.0.1:17433 -insecure <<< "exit")"
+          echo "$session" | tee dist/connect-check-results.txt
+
+          expected="connected to sapedb ${version}"
+          case "$session" in
+            *"$expected"*)
+              echo "welcome's productVersion matches the stamp: $expected" ;;
+            *)
+              echo "FAIL: did not see '$expected' in the session above"
+              exit 1
+              ;;
+          esac
+
+      # ---------------------------------------------------------------------
+      # Dry run only: this is the proof the workflow works, kept somewhere a
+      # human can look at it, without publishing anything.
+      # ---------------------------------------------------------------------
+
+      - name: Upload dry-run results
+        if: steps.mode.outputs.publish != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sapedb-dry-run-${{ github.run_id }}
+          path: |
+            dist/
+          retention-days: 14
+          if-no-files-found: error
+
+      # ---------------------------------------------------------------------
+      # Real release only. Gated on steps.mode.outputs.publish, which is only
+      # ever "true" for a push of a tag matching v* (see "Determine version"
+      # above) — never for workflow_dispatch, no matter what it is called or
+      # who runs it.
+      #
+      # RULE, FOLLOWED: written, not fired. No step below this line has run
+      # even once as part of this work — doing so needs an actual v* tag,
+      # and creating one is the coordinator's decision, not this workflow's
+      # and not the agent that wrote it. `git tag` before and after this
+      # change is identical, and nothing here was pushed to any registry.
+      # ---------------------------------------------------------------------
+
+      - name: Log in to GHCR
+        if: steps.mode.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push the image
+        if: steps.mode.outputs.publish == 'true'
+        run: |
+          version="${{ steps.mode.outputs.version }}"
+          docker tag sapedb:ci "${IMAGE_NAME}:${version}"
+          docker tag sapedb:ci "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:${version}"
+          docker push "${IMAGE_NAME}:latest"
+
+      - name: Create the GitHub Release
+        if: steps.mode.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.mode.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/sapedb_*
+            dist/sapedbd_*
+            dist/checksums.txt

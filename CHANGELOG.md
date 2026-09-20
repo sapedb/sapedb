@@ -131,6 +131,59 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A tag-driven release: cross-platform binaries, checksums, and a workflow
+  that builds and publishes them.** Before this, a stranger who wanted to run
+  sapedb had to clone the repository and build it from source — there was no
+  `.github` directory at all, and `make dist` only ever built for whichever
+  single platform it ran on.
+
+  `make dist-cross` now builds `sapedb` and `sapedbd` for four platforms:
+  `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64` — where this is
+  actually deployed (the Dockerfile's own base and runtime are Linux, and both
+  architectures are ordinary on cloud VMs now) and where a stranger evaluates
+  it without Docker (an Intel or an Apple Silicon laptop). Every binary is
+  stamped exactly as `make dist` stamps a host build, through the same
+  `internal/build.Path` the Makefile and Dockerfile already share.
+
+  `make checksums` covers every one of those eight artifacts in one
+  `checksums.txt`, in the plain format both `sha256sum -c` and
+  `shasum -a 256 -c` read.
+
+  `make verify-dist` is the guard against the specific failure ISS-18 named:
+  `go build` accepts an `-ldflags -X` for a symbol that does not exist and
+  silently does nothing, so a build succeeding is not evidence it stamped
+  anything. It re-derives the version from each artifact's own bytes instead
+  of trusting the build that produced them — running the one artifact that
+  matches the host directly (`sapedb version`, or reading `sapedbd`'s own
+  first log line), and grepping the stamped string out of every artifact that
+  cannot run on this machine, since `-X` sets a Go string that stripping
+  (`-s -w`) does not remove. Checked against a deliberately unstamped binary
+  built alongside the real ones: `verify-dist` reported `printed sapedb dev,
+  which does not contain v0.1.0-test` and failed, rather than passing quietly.
+
+  `.github/workflows/release.yml` runs all of the above, plus a container
+  image build, on every push of a tag matching `v*`, then publishes the
+  binaries to a GitHub Release and the image to a registry. The same workflow
+  runs from `workflow_dispatch` as a dry run, sharing every build and
+  verification step with the real path — including starting the built image
+  and connecting to it with the binary this same run just built, checking
+  that the welcome's `productVersion` is the stamped version rather than
+  `dev` — and stopping short of the four publishing steps, which it never
+  reaches. The dry run uploads its binaries, checksums and verification
+  output as a workflow artifact instead, private to whoever can already see
+  this repository's Actions runs.
+
+  Measured locally at this commit with a synthetic version
+  (`v0.1.0-test`, chosen because no tag exists to build from and none was
+  created for this): all eight cross-compiled binaries built, `checksums.txt`
+  verified clean with `shasum -a 256 -c`, `verify-dist` passed for all eight
+  and failed correctly against a deliberately unstamped one, and a container
+  built with `--build-arg VERSION=v0.1.0-test` — run, connected to with
+  `sapedb shell`, and torn down — answered `connected to sapedb v0.1.0-test`.
+  What the workflow file itself does on a real tag push, and against a real
+  registry, is not measured here and could not be without doing the thing
+  this task exists to not do.
+
 - **`sapedbd` can follow another `sapedbd`.** Set `SAPEDB_FOLLOW` to the
   connection string of a database on another server and this daemon keeps a
   copy of it: it subscribes to that database's change log from wherever its

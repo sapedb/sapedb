@@ -149,6 +149,22 @@ A binary nobody stamped says `dev`, which is a word no release will be called.
 Nothing here checks for or installs a newer version; asking what this is and
 going to get another one are different jobs, and only the first one is here.
 
+**Releases** are built for four platforms — `linux/amd64`, `linux/arm64`,
+`darwin/amd64`, `darwin/arm64` — with `make dist-cross`, each binary stamped
+the same way `make dist` stamps one for the host it runs on. `make checksums`
+covers all eight artifacts in one `checksums.txt`
+(`sha256sum -c checksums.txt` or `shasum -a 256 -c checksums.txt` both read
+it), and `make verify-dist` re-derives the stamped version from each
+artifact's own bytes rather than trusting that the build succeeded — see
+ISS-18, the reason that check exists at all. `.github/workflows/release.yml`
+runs all of this, plus the container image, on every push of a tag matching
+`v*`, and publishes the binaries to a GitHub Release and the image to a
+registry. It also runs on `workflow_dispatch` as a dry run that shares every
+one of those build and verification steps — including starting the built
+image and checking that a real connection to it reports the stamped
+`productVersion` — and stops before publishing anything, uploading the
+results as a workflow artifact instead.
+
 **Encryption at rest** is AES-GCM per page under a key derived from the secret.
 The meta page is not encrypted, on purpose — something has to be readable
 without the key or "not our file" and "wrong key" become one answer.

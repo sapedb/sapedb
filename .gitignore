@@ -1,3 +1,7 @@
 bin/
+# dist/ is written by `make dist-cross`, `make checksums` and `make
+# verify-dist` — cross-compiled release binaries and their checksum file,
+# never source, regenerated from a tag by .github/workflows/release.yml.
+dist/
 *.db
 .DS_Store
