@@ -46,6 +46,79 @@ recorded, so its absence is not a claim that nothing changed before it.
   shell only ever calls `Explore`/`WhatIsHere`, never `Invoke` — and caught
   by the new `sapedb` package's end-to-end wrapper test, the first thing in
   this repository to call `Invoke` against a real server.
+- `describe` (`internal/store/describe.go`), which satisfies (`batch.go`)
+  formats a mismatched condition value through, still crashed with
+  `fatal error: stack overflow` for a value whose Go type is a *named* type
+  built on top of `[]any` or `map[string]any` (for example `type Rows
+  []any`) and which holds itself — `fits`/`renderCapped`'s type switch only
+  ever matched the two bare types, so a value of a named type fell through
+  to the always-safe-leaf default case and reached a raw `fmt.Sprintf`
+  with no cycle protection, reopening the exact crash this file exists to
+  close. Only reachable by a direct Go caller of the exported `Invoke`
+  handing a self-referential value of such a type as a `{"equals": {"arg":
+  ...}}` argument — this repository's own CLI and server front doors both
+  decode every argument with `json.Unmarshal` first, which never produces
+  one. `fits`/`renderCapped` now widen to a `reflect.Kind()` check
+  (`fitsByReflection`, `renderCappedByReflection`) alongside the exact-type
+  one, closing the gap without changing any byte of the existing
+  byte-identical-to-`fmt.Sprintf` behavior for an ordinary value. Guarded by
+  `TestDescribeOfANamedSelfReferentialSliceTypeReturnsABoundedStringInstead
+  OfCrashing` in `internal/store/describe_named_cycle_test.go`.
+- `stretch` (`internal/store/scan.go`) and `refusedBackwardsRange`
+  (`internal/store/ops.go`) refuse a `From` that sorts after `To` on every
+  field width except one: a single-field `bool` index has exactly two
+  values, `keys.Encode(false)` and `keys.Encode(true)` one step apart, so
+  the one backwards pair a `bool` field can be written with (`From: true,
+  To: false`, both ends inclusive) always encoded to `lower == upper` — the
+  same bytes an intentionally self-pinned range produces — and read back as
+  a silent, errorless empty result instead of the `ErrArgument`/
+  `ErrDeclaration` refusal every other field type gets for the same
+  mistake. Closed with a value-level check (`backwardsBoolRange`, `scan.go`)
+  run alongside the existing byte comparison at both call sites — true and
+  false are never ambiguous the way two floats one ULP apart are, so this
+  is judged before either side reaches `keys.Encode`, without touching the
+  wider (and deliberate) `lower == upper` leniency documented on `stretch`.
+  Scoped to a single-field `bool` index; a composite index carrying a
+  `bool` field alongside others is a different, unmeasured shape this does
+  not cover. Guarded by `TestABackwardsBoolRangeIsNowRefused` in
+  `internal/store/bool_backwards_test.go`, replacing
+  `TestABackwardsBoolRangeIsAcceptedRatherThanRefused`, which used to pin
+  the old (accepted) behavior in place.
+- `runBatch` (`internal/store/batch.go`) rolled back an abandoned
+  transaction only on its own explicit error-return path; a panic partway
+  through a step skipped that call entirely and left `s.pages.Pending()`
+  true, which `runBatch`'s own first line reads as "something is already
+  uncommitted" — refusing every future call on that `*Store`, for as long
+  as it stays in memory, with `ErrUncommitted`. Harmless on the network
+  server (`internal/server`'s `guard` recovers a connection's panic only
+  long enough to notify the client and the operator before re-panicking
+  and taking the whole process down with it), but not for a direct Go
+  caller embedding the store as a library and recovering panics at its own
+  boundary — the ordinary shape of an HTTP framework's per-request
+  recover middleware — which would otherwise keep running against a
+  permanently wedged `*Store`. `runBatch` now defers a recover that rolls
+  back before re-panicking the exact original value unchanged, folding in
+  a second error only if the rollback itself also fails. No input-reachable
+  panic exists in the current write path to trigger this through the
+  public API — every one this package's history found (`sameValue`,
+  `satisfies`/`describe`, the backward-bool range above) is already closed
+  — so this is defense in depth, measured directly by calling `runBatch`
+  with a manufactured panic. Guarded by
+  `TestRunBatchRollsBackAndRepanicsWhenAStepPanics` in
+  `internal/store/runbatch_panic_rollback_test.go`.
+- `handshake` (`internal/server/server.go`) wrapped every failure with
+  `fmt.Errorf("%w: %v", ErrHandshake, err)` — `%v`, not `%w`, on the inner
+  error — so `errors.Is` walking the returned error never reached anything
+  past `ErrHandshake`. For a bad signature this meant `codeFor`
+  (`server.go`), which deliberately checks `signing.ErrBadSignature` before
+  the vaguer `ErrHandshake` fallback, could never reach that check and
+  always reported the wire code `"handshake"` instead of the more specific
+  `"signature"`. All three call sites now wrap with `"%w: %w"` (Go's `fmt`
+  has supported more than one `%w` per `Errorf` since 1.20), so `errors.Is`
+  reaches the real cause and `codeFor`'s existing ordering finally gets to
+  fire. Guarded by `TestARejectedSignatureLeavesExactlyOneNoticeLine` in
+  `internal/server/server_test.go`, updated from asserting the old
+  `"handshake"` code to the corrected `"signature"` one.
 
 ### Changed
 

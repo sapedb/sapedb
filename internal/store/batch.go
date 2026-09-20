@@ -42,6 +42,49 @@ func (s *Store) runBatch(caller Caller, operation Operation, values map[string]a
 			ErrUncommitted, operation.Name)
 	}
 
+	// A panic partway through a step below leaves this Store's own
+	// invariant — no batch runs while something uncommitted is still
+	// pending, checked just above — broken unless something puts it back
+	// before the panic keeps going: s.pages.Pending() would otherwise stay
+	// true forever, and this function's own first line would then refuse
+	// every future caller of this *Store, for as long as it stays in
+	// memory, with ErrUncommitted.
+	//
+	// On the network server (server.go's guard) that is moot by
+	// construction: guard's own recover exists only to tell the client and
+	// the operator something before the goroutine's panic keeps going and
+	// takes the whole process down with it — see guard's own godoc, which
+	// documents this exact gap and explains why dying, not surviving, is
+	// what makes the gap harmless there. It is not moot for a direct Go
+	// caller of the exported Invoke: nothing about this package stops code
+	// that embeds the store as a library from recovering a panic at its
+	// own boundary (an HTTP framework's per-request recover middleware is
+	// the ordinary shape of this) and continuing to run — against the same
+	// *Store — after it. For that caller, "pending forever" is exactly the
+	// wrong-answer-that-outlives-the-panic guard's own godoc warns about,
+	// one layer further out than a goroutine dying can reach.
+	//
+	// This does not turn the panic into an ordinary returned error — r is
+	// re-panicked, unchanged, so guard() and any other recover downstream
+	// still see the exact original value, identity and all, the same
+	// property guard's own godoc relies on. It only makes sure the store's
+	// own bookkeeping is not left broken on the way there. If Rollback
+	// itself also fails — a second, independent problem on top of
+	// whatever caused the panic — that failure is folded into what gets
+	// re-panicked rather than silently dropped, the same as the explicit
+	// error path just below already does for an ordinary returned error.
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		if abandoned := s.Rollback(); abandoned != nil {
+			panic(fmt.Errorf("panic during batch %q (%v), and abandoning it also failed: %w",
+				operation.Name, r, abandoned))
+		}
+		panic(r)
+	}()
+
 	by := Attribution{
 		Operation: operation.Name,
 		Version:   operation.Version,

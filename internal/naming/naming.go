@@ -94,22 +94,39 @@ type Hit struct {
 //	find . \( -name .git -o -name node_modules -o -name dist \) -prune \
 //	  -o -type f -print | wc -l
 //
-// The largest file is internal/server/server_test.go at 53563 bytes — well
-// under the 64KB mark, so that mutant is silent because nothing in this
-// tree is close to it. But the total file count is 110, already PAST the
-// 85-file mark. The premise "the tree isn't big enough to reach it" holds
-// for size, but does NOT hold for file count on this side: if a
-// stop-after-85-files cap were really present in Walk today, it would
-// already be cutting the tail off this tree — whatever filepath.WalkDir
-// visits last — with nobody told. No file in this tree starts with "#".
-// So two of the three edges are a boundary the tree happens to sit inside;
-// the file-count edge is one the tree has already crossed, and only the
-// absence of that cap from the actual code is what keeps this quiet.
+// Both these numbers move every time a file is added or grows, and this
+// paragraph is only ever as current as the last time somebody re-ran the two
+// commands above and edited it — it is not a claim this file checks itself
+// (see the sign paragraph below for why that gap is left open, not closed).
+// Measured against commit 86c5f0a: the largest file is
+// internal/cli/cli_test.go at 90201 bytes — already PAST the 64KB mark, not
+// "well under" it — and the total file count is 114, already PAST the
+// 85-file mark too. Both premises this paragraph once rested on ("the tree
+// isn't big enough to reach it") are wrong for the tree as it stands today:
+// if either the file-size cutoff or the stop-after-85-files cap were really
+// present in Walk right now, each would already be silently cutting into
+// this tree's own scan — the size cap on cli_test.go specifically, the count
+// cap on whatever filepath.WalkDir visits past the 85th entry — with nobody
+// told either way. No file in this tree starts with "#", so that third edge
+// is the one still sitting inside its boundary; the other two have already
+// been crossed, and only the absence of those two caps from the actual code
+// (confirmed by reading Walk above: no size check, no count, no name-prefix
+// rule) is what keeps this quiet rather than already narrowing the patrol.
 //
-// Sign that this has been hit: a file crossing 64KB, or the patrol's
-// silence narrowing further as the tree keeps growing past 85 files — some
-// file it used to scan quietly stops being scanned — with nothing telling
-// anyone that happened.
+// There is no sign that either of these two crossed edges has been hit,
+// and that is not an oversight this paragraph forgot to fill in — an
+// earlier version of it here promised one ("Sign that this has been hit:
+// ...") and then went on to describe the opposite of a sign: a file this
+// patrol used to scan quietly dropping out of what it scans, "with nothing
+// telling anyone that happened." A cap that fires does not announce
+// itself; it just narrows what Walk looks at, and nothing downstream of
+// Walk (naming_test.go included, by its own admission a few paragraphs up)
+// is built to notice a file going missing from that set. If one of these
+// two caps is ever reintroduced for real, the only way to catch it is the
+// same way this paragraph caught the size one above: rerun the two find
+// commands and compare against what Walk actually returns for those files
+// by name — there is nothing here that does that automatically, on
+// purpose, per task 0051's own call not to reopen this chase.
 func Walk(root string) ([]Hit, error) {
 	var hits []Hit
 

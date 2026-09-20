@@ -1,34 +1,35 @@
 package store
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-// TestABackwardsBoolRangeIsAcceptedRatherThanRefused pins a real, measured
-// gap in task 0045's promise, found while building task 0054's case table
-// (section 3.4 of the task doc) rather than something this task fixes.
+// TestABackwardsBoolRangeIsNowRefused replaces TestABackwardsBoolRangeIsAccep
+// tedRatherThanRefused, which pinned a real, measured gap in task 0045's
+// promise found while building task 0054's case table (section 3.4 of the
+// task doc): a bool field breaks the "lower == upper is left alone" rule
+// completely rather than at one edge, because it has exactly two values —
+// keys.Encode(false) and keys.Encode(true) are one step apart, so the ONE
+// backwards pair a bool field can be written with (From: true, To: false,
+// both inclusive) always lands on lower == upper, the same bytes an
+// intentionally self-pinned range produces.
 //
-// Task 0045 made stretch() (scan.go) refuse a From that sorts after To,
-// rather than silently reading as an empty stretch. The refusal is keyed on
-// lower == upper being LEFT ALONE (not refused) because that shape usually
-// means "an Exclusive bound pinned against itself" or, on a number field,
-// two inclusive ends one ULP apart — both genuinely empty ranges a caller
-// meant to write.
+// This task closes that gap with backwardsBoolRange (scan.go), a value-level
+// check — true and false are never ambiguous the way two floats one ULP
+// apart are, so this can be judged before either side reaches keys.Encode,
+// unlike the general lower == upper case stretch()'s doc explains is left
+// alone on purpose. Both places task 0045 already made this refusal for
+// every other field width now make it for bool too: refusedBackwardsRange
+// (ops.go) at declare time, when both ends are constants, and stretch()
+// (scan.go) at call time, when either end is an argument.
 //
-// A bool field breaks that assumption completely rather than at one edge:
-// it has exactly two values, so keys.Encode(false) and keys.Encode(true)
-// are one step apart, and EVERY backwards pair on a bool field — not some
-// of them — lands on lower == upper. Task 0045's promise therefore covers
-// none of the domain on a bool field: this test's own name says what is
-// actually true today, not "every backwards range is refused" (which is
-// false and must not be written anywhere as though it were).
-//
-// This is deliberately not fixed here — see the comment 0054 added to
-// stretch()'s doc (scan.go) for the measurements and for why a fix needs its
-// own widen-the-net measurement this task has no budget for. The gap is not
-// a data-loss bug: the wrong answer is an empty one, not a wrong one, which
-// is exactly what makes it safe to leave pinned rather than guessed at.
-func TestABackwardsBoolRangeIsAcceptedRatherThanRefused(t *testing.T) {
+// Scoped narrow, matching the fix: a single-field bool index. A composite
+// index with a bool field alongside others is a different, unmeasured shape
+// this does not claim to cover — left as open debt in this task's report.
+func TestABackwardsBoolRangeIsNowRefused(t *testing.T) {
 	_, store := fresh(t, 7701)
-	collection, err := store.Declare(Spec{
+	_, err := store.Declare(Spec{
 		Name: "flags",
 		Key:  Key{Path: "id", Type: TypeString, Auto: "ulid"},
 		Indexes: []Index{{Name: "by_flag", Fields: []Field{
@@ -38,30 +39,18 @@ func TestABackwardsBoolRangeIsAcceptedRatherThanRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []bool{true, false, true} {
-		if _, err := collection.Put(map[string]any{"b": v}); err != nil {
-			t.Fatal(err)
-		}
-	}
 
-	// The constant-endpoint path: both ends are written into the
-	// declaration itself, so refusedBackwardsRange (ops.go) is the function
-	// that would have to catch this at declare time, and does not.
+	// The constant-endpoint path: both ends are written into the declaration
+	// itself, so refusedBackwardsRange (ops.go) must catch this at declare
+	// time now.
 	op := Operation{
 		Name: "flags.backwards", Collection: "flags", Action: ActionScan,
 		Index: "by_flag", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: true}}},
 		To:   &Endpoint{Terms: []Term{{Value: false}}},
 	}
-	if _, err := store.DeclareOperation(op); err != nil {
-		t.Fatalf("From=true To=false on a bool field was refused at declare (the gap this test pins has closed — see stretch()'s doc comment and narrow this test rather than deleting it): %v", err)
-	}
-	result, err := store.Invoke(Caller{}, "flags.backwards", 0, nil)
-	if err != nil {
-		t.Fatalf("invoking the accepted backwards range failed rather than reading empty: %v", err)
-	}
-	if result.Count != 0 {
-		t.Fatalf("From=true To=false on a bool field returned %d rows, want 0 (empty, not an error, is the gap this test pins)", result.Count)
+	if _, err := store.DeclareOperation(op); !errors.Is(err, ErrDeclaration) {
+		t.Fatalf("From=true To=false on a bool field: want ErrDeclaration at declare time, got %v", err)
 	}
 
 	// The argument path: only stretch() (scan.go) ever sees the values, at
@@ -77,11 +66,19 @@ func TestABackwardsBoolRangeIsAcceptedRatherThanRefused(t *testing.T) {
 	if _, err := store.DeclareOperation(argOp); err != nil {
 		t.Fatalf("the argument-shaped operation was refused at declare: %v", err)
 	}
-	result, err = store.Invoke(Caller{}, "flags.arg", 0, map[string]any{"lo": true, "hi": false})
+	_, err = store.Invoke(Caller{}, "flags.arg", 0, map[string]any{"lo": true, "hi": false})
+	if !errors.Is(err, ErrArgument) {
+		t.Fatalf("lo=true hi=false on a bool field: want ErrArgument at call time, got %v", err)
+	}
+
+	// The forward pair, and the pinned-empty pair, must still read as before:
+	// this fix must not turn an honest empty stretch into a refusal.
+	if _, err := store.Invoke(Caller{}, "flags.arg", 0, map[string]any{"lo": false, "hi": true}); err != nil {
+		t.Fatalf("the forward pair lo=false hi=true was refused: %v", err)
+	}
+	result, err := store.Invoke(Caller{}, "flags.arg", 0, map[string]any{"lo": true, "hi": true})
 	if err != nil {
-		t.Fatalf("invoking lo=true hi=false failed rather than reading empty: %v", err)
+		t.Fatalf("lo=true hi=true (pinned to a single point) was refused: %v", err)
 	}
-	if result.Count != 0 {
-		t.Fatalf("lo=true hi=false on a bool field returned %d rows, want 0", result.Count)
-	}
+	_ = result
 }

@@ -260,6 +260,94 @@ func TestDescribeOfASelfReferentialMapReturnsWithinTwoSeconds(t *testing.T) {
 	}
 }
 
+// TestDescribeOfASelfReferentialSliceContentIsWellFormedNotJustBounded closes
+// a gap the three cases above leave open: each only checks that describe
+// RETURNS, within a bounded length, in valid UTF-8 — none of them look at
+// what actually came back. A renderCapped that dropped a leaf, printed the
+// wrong one, joined elements with the wrong separator, or emitted its cut
+// marker more than once would satisfy every assertion above unchanged.
+//
+// The golden string below was produced by actually running describe(s) on
+// this exact value and reading back what it printed — not hand-derived —
+// per this file's own house rule against hand-copying an expected string
+// from anywhere other than a real run of the code being tested.
+func TestDescribeOfASelfReferentialSliceContentIsWellFormedNotJustBounded(t *testing.T) {
+	s := []any{"before", nil, "after"}
+	s[1] = s
+
+	got := describe(s)
+	want := "[before [before [before [before [before [before … after] after] after] after] after] after]"
+	if got != want {
+		t.Fatalf("describe(self-referential slice) = %q, want %q", got, want)
+	}
+	// Each of the describeMaxDepth (6) levels this walks before hitting the
+	// depth ceiling visits both real leaves once — "before" and "after"
+	// dropping out of that count, or gaining an extra copy, would still
+	// pass every length/UTF-8 check above.
+	if n := strings.Count(got, "before"); n != describeMaxDepth {
+		t.Errorf("describe(self-referential slice) contains %q %d times, want %d", "before", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "after"); n != describeMaxDepth {
+		t.Errorf("describe(self-referential slice) contains %q %d times, want %d", "after", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "…"); n != 1 {
+		t.Errorf("describe(self-referential slice) contains the cut marker %d times, want exactly 1", n)
+	}
+	if n, m := strings.Count(got, "["), strings.Count(got, "]"); n != m {
+		t.Errorf("describe(self-referential slice) has %d '[' but %d ']' — not bracket-balanced: %q", n, m, got)
+	}
+}
+
+// TestDescribeOfASelfReferentialMapContentIsWellFormedNotJustBounded is the
+// map-shaped sibling of the slice case above, same reasoning: bounded length
+// and valid UTF-8 both tolerate a renderCapped that silently swaps a key for
+// its value, drops a key, or repeats one.
+func TestDescribeOfASelfReferentialMapContentIsWellFormedNotJustBounded(t *testing.T) {
+	m := map[string]any{"before": 1, "after": 2}
+	m["self"] = m
+
+	got := describe(m)
+	want := "map[after:2 before:1 self:map[after:2 before:1 self:map[after:2 before:1 self:map[after:2 before:1 self:map[after:2 before:1 self:map[after:2 before:1 self:…]]]]]]"
+	if got != want {
+		t.Fatalf("describe(self-referential map) = %q, want %q", got, want)
+	}
+	if n := strings.Count(got, "before:1"); n != describeMaxDepth {
+		t.Errorf("describe(self-referential map) contains %q %d times, want %d", "before:1", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "after:2"); n != describeMaxDepth {
+		t.Errorf("describe(self-referential map) contains %q %d times, want %d", "after:2", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "…"); n != 1 {
+		t.Errorf("describe(self-referential map) contains the cut marker %d times, want exactly 1", n)
+	}
+}
+
+// TestDescribeOfATwoStepIndirectCycleContentIsWellFormedNotJustBounded is the
+// two-hop-cycle sibling: a and b alternate, so a content bug that only shows
+// up on the SECOND hop (as opposed to a value cycling through itself
+// directly) would not necessarily be caught by the direct-cycle cases above.
+func TestDescribeOfATwoStepIndirectCycleContentIsWellFormedNotJustBounded(t *testing.T) {
+	a := []any{"a-side", nil}
+	b := []any{"b-side", nil}
+	a[1] = b
+	b[1] = a
+
+	got := describe(a)
+	want := "[a-side [b-side [a-side [b-side [a-side [b-side …]]]]]]"
+	if got != want {
+		t.Fatalf("describe(indirect cycle) = %q, want %q", got, want)
+	}
+	if n := strings.Count(got, "a-side"); n != 3 {
+		t.Errorf("describe(indirect cycle) contains %q %d times, want 3", "a-side", n)
+	}
+	if n := strings.Count(got, "b-side"); n != 3 {
+		t.Errorf("describe(indirect cycle) contains %q %d times, want 3", "b-side", n)
+	}
+	if n := strings.Count(got, "…"); n != 1 {
+		t.Errorf("describe(indirect cycle) contains the cut marker %d times, want exactly 1", n)
+	}
+}
+
 func TestDescribeOfATwoStepIndirectCycleReturnsWithinTwoSeconds(t *testing.T) {
 	a := []any{"a-side", nil}
 	b := []any{"b-side", nil}

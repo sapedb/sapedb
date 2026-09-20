@@ -255,11 +255,52 @@ func (c *Collection) stretch(within Range, prefix []byte, fields []Field) (lower
 	if err != nil {
 		return nil, nil, err
 	}
-	if upper != nil && bytes.Compare(lower, upper) > 0 {
+	if (upper != nil && bytes.Compare(lower, upper) > 0) || backwardsBoolRange(fields, within.From, within.To) {
 		return nil, nil, fmt.Errorf("%w: the from bound sorts after the to bound, so this stretch is backwards and would never return a row; From is the low end and To is the high end, in both directions",
 			ErrArgument)
 	}
 	return lower, upper, nil
+}
+
+// backwardsBoolRange closes the one shape the byte comparison above cannot
+// see (task 0054's own measurement, pinned in
+// TestABackwardsBoolRangeIsAcceptedRatherThanRefused before this fix): a
+// single-field bool index whose two INCLUSIVE ends are the two bool values
+// in the wrong order, From: true, To: false. keys.Encode gives false and
+// true consecutive bytes (tagFalse, tagTrue = 0x20, 0x21), so
+// successor(encode(true)) == encode(false) and the byte comparison above
+// sees lower == upper — the same bytes an intentionally self-pinned
+// inclusive bound produces on any other field — rather than lower > upper.
+//
+// Read at the value level, before either side is encoded, true and false
+// are never ambiguous the way two floats one ULP apart can be (see
+// stretch()'s own doc for why that ambiguity is exactly what keeps the
+// general lower == upper case from being refused outright), so this closes
+// the bool case without touching that wider, deliberate behavior.
+//
+// Scoped narrow on purpose: exactly one bool field, both ends present, both
+// inclusive, both a plain bool value. A composite index carrying a bool
+// field alongside others is a different, unmeasured shape this does not
+// claim to cover — see this task's report for that as open debt.
+func backwardsBoolRange(fields []Field, from, to *Bound) bool {
+	if len(fields) != 1 || fields[0].Type != TypeBool {
+		return false
+	}
+	if from == nil || to == nil || from.Exclusive || to.Exclusive {
+		return false
+	}
+	if len(from.Values) != 1 || len(to.Values) != 1 {
+		return false
+	}
+	lo, ok := from.Values[0].(bool)
+	if !ok {
+		return false
+	}
+	hi, ok := to.Values[0].(bool)
+	if !ok {
+		return false
+	}
+	return lo && !hi
 }
 
 // walk is the one walk both Scan and walkRange are: a stretch of one keyspace,

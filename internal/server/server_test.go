@@ -323,6 +323,46 @@ func TestAnAccountNameCannotBeAPath(t *testing.T) {
 	}
 }
 
+// TestAnAccountNameCannotBeAPathCompletesWithoutHanging locks in what this
+// task actually measured against a debt that described
+// TestAnAccountNameCannotBeAPath hanging at Close(): it does not, today, on
+// this tree — run repeatedly, with -race, it finishes in well under a
+// second every time. dbname.Check (internal/dbname) refuses every one of
+// these names with a bounded, single-pass scan over at most 64 runes,
+// before server.database() ever reaches s.mutex.Lock() or touches the
+// filesystem — so there is no lock left held and no blocking syscall
+// started, for any of them, for a later Close() to wait on.
+//
+// This does not merely assert that; it runs the exact scenario (every name
+// in that test's own table, through Store(), followed by Close(), all on
+// this test's own goroutine rather than relying on t.Cleanup) against a
+// hard deadline, so that if a hang like the one the debt described is ever
+// reintroduced, this test fails fast and names the mechanism, instead of
+// the whole package's `go test` run silently blocking until its outer
+// timeout finally kills it with a bare goroutine dump to read through.
+func TestAnAccountNameCannotBeAPathCompletesWithoutHanging(t *testing.T) {
+	server, err := New(Options{Dir: t.TempDir(), Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, name := range []string{"../escape", "a/b", `a\b`, "", ".", "..", "a:b", "a\x00b", strings.Repeat("x", 65)} {
+			_, _, _ = server.Store(name, "main")
+			_, _, _ = server.Store("acme", name)
+		}
+		_ = server.Close()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Store() over a table of unusable account/database names, followed by Close(), did not finish within 5s — this is the hang a stale debt described")
+	}
+}
+
 // Scopes are not taken from the request, so an operation that declares one
 // cannot be reached over the wire at all yet. Being incomplete in that
 // direction is the safe one.
@@ -1107,16 +1147,19 @@ func TestARejectedSignatureLeavesExactlyOneNoticeLine(t *testing.T) {
 	if frame.Type != protocol.Failure {
 		t.Fatalf("it was let in with a %s", frame.Type)
 	}
-	// codeFor's own list checks signing.ErrBadSignature before ErrHandshake,
-	// but handshake() wraps a bad signature as "%w: %v" with ErrHandshake in
-	// the %w slot — so the chain errors.Is walks only ever reaches
-	// ErrHandshake, and the code a client actually receives here is
-	// "handshake", not "signature". Task 0048 section 6 named "signature";
-	// section 2 of the same task already hedges with "signature or handshake", and
-	// codeFor/handshake() are explicitly out of scope for this task, so this
-	// test asserts what the code actually does rather than what one line of
-	// the task guessed it did.
-	if !strings.Contains(string(frame.Payload), `"code":"handshake"`) {
+	// codeFor's own list checks signing.ErrBadSignature before ErrHandshake.
+	// handshake() used to wrap a bad signature as "%w: %v" with ErrHandshake
+	// in the %w slot, so the chain errors.Is walked only ever reached
+	// ErrHandshake and the code a client received here was "handshake", not
+	// "signature" (Task 0048 section 6 named "signature" as the intended
+	// code; this test used to assert the narrower thing the code actually
+	// did instead, with that history written down here). handshake() now
+	// wraps both ErrHandshake and the inner error with "%w: %w" — Go's fmt
+	// has taken more than one %w in a single Errorf since 1.20 — so
+	// errors.Is reaches signing.ErrBadSignature too, and codeFor's own
+	// ordering, which already checked that sentinel first, is what finally
+	// gets to fire.
+	if !strings.Contains(string(frame.Payload), `"code":"signature"`) {
 		t.Errorf("the failure's code is not what a client would switch on: %s", frame.Payload)
 	}
 
@@ -1438,11 +1481,12 @@ func TestGuardSendsANoticeLineAFailureFrameAndPanicsAgainWithTheOriginalValue(t 
 // section 6's third assertion: when the panic value already IS an error, guard
 // must not have re-wrapped it with %v (or anything else) on the way to
 // failure() — this is the exact shape task 0049's brief warned against,
-// citing handshake()'s fmt.Errorf("%w: %v", ErrHandshake, err) dropping
-// signing.ErrBadSignature out of errors.Is. Measured here the same way that
-// bug would be measured: build a payload from an error carrying a sentinel,
-// and check errors.Is still finds it after the payload comes back through
-// codeFor.
+// citing handshake()'s (at the time) fmt.Errorf("%w: %v", ErrHandshake, err)
+// dropping signing.ErrBadSignature out of errors.Is, since fixed by wrapping
+// with "%w: %w" instead (see TestARejectedSignatureLeavesExactlyOneNotice
+// Line). Measured here the same way that bug was measured: build a payload
+// from an error carrying a sentinel, and check errors.Is still finds it
+// after the payload comes back through codeFor.
 func TestGuardOnAnErrorPanicPreservesItsErrorsIsIdentity(t *testing.T) {
 	serverEnd, clientEnd := net.Pipe()
 	defer serverEnd.Close()

@@ -864,7 +864,7 @@ func refusedBackwardsRange(from, to *Endpoint, fields []Field) error {
 	if err != nil {
 		return err
 	}
-	if bytes.Compare(lower, upper) > 0 {
+	if bytes.Compare(lower, upper) > 0 || backwardsBoolRange(fields, endpointBound(from), endpointBound(to)) {
 		return fmt.Errorf("%w: the from bound sorts after the to bound, so this operation would never return a row with any argument; From is the low end and To is the high end, in both directions",
 			ErrDeclaration)
 	}

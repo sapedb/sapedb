@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -35,13 +36,29 @@ import (
 // switch walks — []any and map[string]any, the only two container shapes a
 // document field or a declared TypeAny argument can ever actually be built
 // from (json.Unmarshal only ever produces those two container types plus
-// nil/bool/float64/string; a direct Go caller of Invoke could in principle
-// hand over some other container-like type, but that is already outside
-// what sameValue itself walks into — it falls back to reflect.DeepEqual for
-// anything that is not one of these two, and this mirrors that boundary
-// rather than widening it) — counting depth and the element count at each
-// level as it goes, with a ceiling on both that makes the walk return an
-// answer even when v holds itself. If the walk says the shape is small and
+// nil/bool/float64/string). A direct Go caller of Invoke can in principle
+// hand over some other container-like type — a named type built on top of
+// either shape, such as "type Rows []any", which Go's type switch tests
+// (the exact dynamic type, not the underlying one) do not match, even
+// though a value of that type can hold itself exactly the way a bare
+// []any can.
+//
+// This one place does NOT mirror sameValue's own boundary at that type. The
+// earlier version of this paragraph said it did, on the theory that
+// sameValue "falls back to reflect.DeepEqual for anything that is not one
+// of these two, and this mirrors that boundary" — measured, that analogy
+// does not carry over safely to describe: sameValue's fallback
+// (reflect.DeepEqual) is itself cycle-safe, built into the standard
+// library, so stopping the walk there costs sameValue nothing. describe's
+// fallback for "not one of these two shapes" is the bare fmt.Sprintf this
+// whole file exists to keep from recursing forever — so mirroring the
+// type-exact boundary here reopened exactly that crash for any named slice
+// or map type shaped like []any / map[string]any. fits and renderCapped
+// below close that gap with a reflect.Kind() check (fitsByReflection,
+// renderCappedByReflection) alongside the exact-type one — counting depth
+// and the element count at each level as it goes, with a ceiling on both
+// that makes the walk return an answer even when v holds itself. If the
+// walk says the shape is small and
 // shallow enough, fmt.Sprintf is safe to call on it — a value that visibly
 // bottoms out within the depth ceiling cannot also be cyclic, since an
 // actual cycle only ever manifests as a container path that never bottoms
@@ -150,14 +167,64 @@ func fits(v any, depthBudget int) bool {
 		return true
 
 	default:
-		// Not one of the two container shapes this walks — a scalar, nil,
-		// or (reachable only through the direct Go API, not through this
-		// package's own two doors) some other Go type entirely. Either
-		// way it is a leaf as far as this recursion is concerned, exactly
-		// as it is a leaf as far as sameValue's own type switch is
-		// concerned, and a leaf always fits: there is nowhere further
-		// down for it to hold a cycle through the two shapes this is
-		// watching for.
+		// Not the exact []any / map[string]any this switch tests for, but
+		// that is not the same question as "not a container" — a named
+		// type built on either shape (reachable only through the direct Go
+		// API, not through this package's own two doors: JSON never
+		// produces one) can still hold itself the same way a bare []any
+		// can, and fitsByReflection is what keeps that from being treated
+		// as an always-safe leaf the way a real scalar is.
+		return fitsByReflection(v, depthBudget)
+	}
+}
+
+// fitsByReflection extends fits' shape check, by reflect.Kind() rather than
+// exact dynamic type, to a slice or map that is not literally []any or
+// map[string]any but is built the same way underneath — a named type such
+// as `type Rows []any`. See the package doc above (the paragraph beginning
+// "This one place does NOT mirror sameValue's own boundary") for why this
+// widening exists here and not in sameValue: sameValue's own fallback for
+// this same boundary (reflect.DeepEqual) is already cycle-safe, and this
+// function's caller's fallback (a bare fmt.Sprintf, in renderCapped's
+// default case having failed too) is not.
+//
+// Any element kind is accepted for the slice case (not just an interface
+// element) and any key kind for the map case (not just string) — narrowing
+// either would leave another named-type shape free to crash the exact same
+// way this closes for []any / map[string]any, for a distinction (the
+// element or key type) that has no bearing on whether fmt can walk it
+// forever.
+func fitsByReflection(v any, depthBudget int) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice:
+		if depthBudget <= 0 || rv.Len() > describeMaxElementsPerLevel {
+			return false
+		}
+		for i := 0; i < rv.Len(); i++ {
+			if !fits(rv.Index(i).Interface(), depthBudget-1) {
+				return false
+			}
+		}
+		return true
+
+	case reflect.Map:
+		if depthBudget <= 0 || rv.Len() > describeMaxElementsPerLevel {
+			return false
+		}
+		iter := rv.MapRange()
+		for iter.Next() {
+			if !fits(iter.Value().Interface(), depthBudget-1) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		// A true leaf (a scalar, nil, a struct, a pointer that is not
+		// itself a slice/map) — nowhere further down for it to hold a
+		// cycle through the shapes this file walks, exactly as it is a
+		// leaf as far as sameValue's own type switch is concerned.
 		return true
 	}
 }
@@ -214,11 +281,87 @@ func renderCapped(v any, depth int) string {
 		return "map[" + strings.Join(parts, " ") + "]"
 
 	default:
-		// A leaf never recurses, so it is always safe to hand straight to
-		// the real formatter regardless of how deep the walk already is —
-		// the recursion this whole file exists to bound only runs through
-		// the two container cases above.
+		// Mirror fits' own default case: try the named-slice/named-map
+		// widening by reflect.Kind() before falling back to a bare
+		// fmt.Sprintf, which is the one call this whole file exists to
+		// keep from ever running on a value that can recurse forever.
+		if rendered, handled := renderCappedByReflection(v, depth); handled {
+			return rendered
+		}
+		// A true leaf — nowhere further down for fmt to recurse into, so
+		// handing it straight to the real formatter is safe regardless of
+		// how deep the walk already is.
 		return fmt.Sprintf("%v", typed)
+	}
+}
+
+// renderCappedByReflection is renderCapped's own counterpart to
+// fitsByReflection: the same bounded bracket-text construction, by
+// reflect.Kind() rather than exact dynamic type, for a named slice or map
+// type fits (above) decided did not fit. handled is false for anything
+// that is not a Slice or Map by Kind(), telling the caller to fall back to
+// a bare fmt.Sprintf as it always has for an ordinary scalar or struct.
+//
+// The map branch sorts by each key's %v text rather than repeating
+// sort.Strings on typed string keys the way renderCapped's map[string]any
+// case does — fmt's own %v sorts a map's keys by a richer rule than
+// lexical text (fmtsort orders by kind first: numeric keys numerically,
+// for instance), so this does not claim byte-identical output against a
+// real fmt.Sprintf on some other named map type the way the exact-type
+// branches above can. It does not need to: this only ever runs once fits
+// has already decided v cannot safely reach fmt.Sprintf at all, so there is
+// no real rendering here to match — only a bounded, deterministic one to
+// produce instead of a crash.
+func renderCappedByReflection(v any, depth int) (string, bool) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Slice:
+		if depth >= describeMaxDepth {
+			return "…", true
+		}
+		n := rv.Len()
+		shown, cut := n, false
+		if shown > describeMaxElementsPerLevel {
+			shown, cut = describeMaxElementsPerLevel, true
+		}
+		parts := make([]string, 0, shown+1)
+		for i := 0; i < shown; i++ {
+			parts = append(parts, renderCapped(rv.Index(i).Interface(), depth+1))
+		}
+		if cut {
+			parts = append(parts, "…")
+		}
+		return "[" + strings.Join(parts, " ") + "]", true
+
+	case reflect.Map:
+		if depth >= describeMaxDepth {
+			return "…", true
+		}
+		type entry struct {
+			text string
+			val  reflect.Value
+		}
+		keys := rv.MapKeys()
+		entries := make([]entry, len(keys))
+		for i, k := range keys {
+			entries[i] = entry{text: fmt.Sprintf("%v", k.Interface()), val: rv.MapIndex(k)}
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].text < entries[j].text })
+		shown, cut := entries, false
+		if len(shown) > describeMaxElementsPerLevel {
+			shown, cut = shown[:describeMaxElementsPerLevel], true
+		}
+		parts := make([]string, 0, len(shown)+1)
+		for _, e := range shown {
+			parts = append(parts, e.text+":"+renderCapped(e.val.Interface(), depth+1))
+		}
+		if cut {
+			parts = append(parts, "…")
+		}
+		return "map[" + strings.Join(parts, " ") + "]", true
+
+	default:
+		return "", false
 	}
 }
 

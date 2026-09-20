@@ -231,12 +231,14 @@ func guard(conn net.Conn, notice func(string)) {
 	// handing the very same error to failure() (and, through it, codeFor)
 	// preserves whatever errors.Is chain it already carried, exactly the
 	// property task 0049's brief warned this file not to lose a second
-	// time. handshake() (this same package) wraps signing.ErrBadSignature
-	// with fmt.Errorf("%w: %v", ErrHandshake, err) — %v, not %w, on the
-	// inner error — and that single wrong verb is why codeFor reports a
-	// signature failure as "handshake" instead of "signature" (logged as
-	// a debt, not fixed here: section 5 of this task keeps codeFor and
-	// handshake() out of scope). This file does not repeat that shape: a
+	// time. handshake() (this same package) used to wrap signing.
+	// ErrBadSignature with fmt.Errorf("%w: %v", ErrHandshake, err) — %v,
+	// not %w, on the inner error — and that single wrong verb was why
+	// codeFor reported a signature failure as "handshake" instead of
+	// "signature". Both handshake()'s call sites now wrap with "%w: %w" —
+	// Go's fmt has supported more than one %w in a single Errorf since
+	// 1.20, and errors.Is walks every one of them — so this file's own
+	// history is the reference case for the shape it does not repeat: a
 	// panic value that is already an error is passed through as-is, not
 	// re-wrapped with %v or %w. A panic value that was never an error —
 	// the ordinary case, a string from a bare `panic("...")` or a runtime
@@ -491,7 +493,7 @@ const (
 func (s *Server) handshake(reader *protocol.Reader, out *sender) (*session, error) {
 	frame, err := reader.Read()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHandshake, err)
+		return nil, fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	if frame.Type != protocol.Hello {
 		return nil, fmt.Errorf("%w: it began with a %s frame", ErrHandshake, frame.Type)
@@ -499,7 +501,7 @@ func (s *Server) handshake(reader *protocol.Reader, out *sender) (*session, erro
 
 	opening := hello{}
 	if err := json.Unmarshal(frame.Payload, &opening); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrHandshake, err)
+		return nil, fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	if opening.Mode == "" {
 		opening.Mode = ModeBound
@@ -523,7 +525,14 @@ func (s *Server) handshake(reader *protocol.Reader, out *sender) (*session, erro
 		// nobody signed for must not so much as cause a file to appear.
 		db, err := s.verify(opening.Account, opening.DBName, opening.Password, opening.Signature)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrHandshake, err)
+			// Both %w: errors.Is must still be able to walk past ErrHandshake
+			// to whatever s.verify actually failed with — signing.ErrBadSignature
+			// chief among them — which "%w: %v" used to lose. See codeFor's own
+			// list (below): it checks signing.ErrBadSignature before
+			// ErrHandshake specifically so a bad signature reports as
+			// "signature", not the vaguer "handshake" catch-all, and that
+			// order only ever worked once this wrapping matched it.
+			return nil, fmt.Errorf("%w: %w", ErrHandshake, err)
 		}
 		live.bound = db
 		live.verified[opening.DBName] = db
