@@ -263,6 +263,93 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **An operation bundle can be signed and verified (SAPE-10).** A bundle is a
+  set of declarations that came from somebody else. `internal/bundle` is the
+  two questions a server has to answer before it stores one — who signed this,
+  and is it still the thing they signed — and nothing more. **A bundle cannot
+  be installed yet**; SAPE-12 is the worked example that will do it.
+
+  **What a bundle is.** An apply file with a name, an author and a signature
+  on it. That was read out of the tree rather than invented: `sapedb apply`
+  already reads `{"collections": [Spec...], "operations": [Operation...]}`,
+  and those two lists are what an external operation module needs to be. The
+  R&D note called the v1 shape "collections, operations, shapes"; there is no
+  shape type in this repository, so v1 carries the two that exist.
+
+  **What it deliberately cannot express**: code — no custom action, no
+  expression language, no trigger, no plugin, no WASM, so a verified bundle
+  can widen what a database holds but not what the server can do, which is why
+  signing is enough and sandboxing is not needed; data — it declares shapes
+  and leaves them empty; removal — there is no uninstall; namespacing — two
+  bundles that both declare `orders` are in a fight that `store.Declare`
+  settles later, not one verification catches; dependencies between bundles;
+  freshness — nothing compares the version string against anything, so a
+  correctly signed old bundle verifies forever; and where it may be installed
+  — unlike a grant it names no account and no database, on purpose.
+
+  **ed25519, not the HMAC everything else here uses.** Every existing
+  signature in this repository is made with the server's own secret and so
+  proves the signer held that secret. A bundle's author is outside; signing it
+  with the server's secret would prove only that the server signed a file it
+  received. So the author keeps a private key and an operator keeps a list of
+  public keys. A verified bundle proves exactly this and no more: *these
+  declarations are the ones the holder of this public key signed, and an
+  operator of this server wrote that key into its configuration.* It does not
+  say who that is in the world — there is no PKI and no name binding, and the
+  `signer` field is signed but self-asserted, so `Verify` returns the label
+  **this operator** wrote beside the key rather than the name the bundle
+  claims about itself. There is no revocation and no rotation in v1. So v1 is
+  narrower than "anyone can publish": an operator decides by hand whose
+  bundles this server will look at, and an empty list refuses everything.
+
+  **The signed message is length-prefixed and counts its lists**, following
+  ISS-11's decision about a grant for the same reason and one more:
+
+  ```
+  "sapedb/bundle:v1" "\n"
+  len(name)       ":" name       "\n"
+  len(version)    ":" version    "\n"
+  len(signer)     ":" signer     "\n"
+  len(public_key) ":" public_key "\n"
+  len(itoa(C))    ":" itoa(C)    "\n"   C = how many collections
+    len(json_i)   ":" json_i     "\n"   each collection, in order
+  len(itoa(O))    ":" itoa(O)    "\n"   O = how many operations
+    len(json_j)   ":" json_j     "\n"   each operation, in order
+  ```
+
+  A count in front of every field is what ISS-11 bought, and it stops one
+  field running into the next. It does nothing about one *list* running into
+  the next: with per-member counts alone, two collections and no operations
+  writes what one collection and one operation writes. The count in front of
+  each list is what closes that, and it is measured rather than argued —
+  `TestNoTwoBundlesShareOneMessage` sweeps 8,192 tuples through this encoding
+  and through the delimiter-joined form beside it: **400 collisions in the
+  delimiter-joined form, 0 in this one**, with the collided pairs' signatures
+  cross-checked so that the test measures forgeries and not formatting.
+
+  **The signature covers declarations, not file bytes.** The file is parsed
+  into `store.Spec`/`store.Operation` and re-marshalled, so whitespace,
+  permissions and timestamps survive a transfer. Unknown fields are refused
+  rather than dropped, as `sapedb apply` already does, and so is a second JSON
+  document in the same file. Hex must be lower case — `hex.Decode` reads `AB`
+  and `ab` alike, so accepting both would be a byte of the file with two
+  spellings. `encoding/json` still folds the case of an object's *key* names,
+  which cannot be closed from here; the byte-flip test states that instead of
+  not reaching it, and holds those changes to the opposite standard — they
+  must still verify. Of 2,114 single-byte changes to a signed bundle, 0 alter
+  a declaration and go unnoticed.
+
+  **Six refusal codes, frozen here**: `bundle_unsigned` (nobody signed it),
+  `bundle_signature` (signed, then changed), `bundle_untrusted` (intact, but
+  by a key this server does not know), `bundle_no_trust` (this server trusts
+  nobody, so nothing installs — an empty list fails closed and says so in
+  those words), `bundle_key` (a key in an operator's own configuration that is
+  not one) and `bundle` (not a bundle this version can read). None is
+  reachable from the wire yet, because verification is offline. They are in
+  `codeFor` anyway: a code added after a tag is a change every client has to
+  cope with, and ISS-21 is this project's record of what an unnamed refusal
+  costs.
+
 - **A tag-driven release: cross-platform binaries, checksums, and a workflow
   that builds and publishes them.** Before this, a stranger who wanted to run
   sapedb had to clone the repository and build it from source — there was no
