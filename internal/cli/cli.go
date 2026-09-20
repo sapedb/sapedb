@@ -67,43 +67,6 @@ var (
 	ErrSecret = errors.New("sapedb: SAPEDB_SECRET is not set")
 )
 
-// oldEnvPrefix is the environment prefix this product read before it was
-// called sapedb, assembled from single-character literals rather than spelled
-// whole. internal/naming walks every file in this tree looking for exactly
-// the four letters that would make; the only reason this function still knows
-// them is to refuse them, and it would be a strange sort of refusal that
-// itself left the old name lying around in the source for the next person to
-// copy.
-var oldEnvPrefix = string([]byte{'R', 'S', 'Q', 'L', '_'})
-
-// sapedbEnvNames are every product variable this command reads. Walked once
-// here, by the check below, instead of once per call to get() — so the set
-// this refuses old names for cannot silently drift from the set it actually
-// reads.
-var sapedbEnvNames = []string{
-	"SAPEDB_DIR", "SAPEDB_ACCOUNT", "SAPEDB_DB", "SAPEDB_ENCRYPT", "SAPEDB_SECRET", "SAPEDB_LABEL",
-}
-
-// rejectOldEnv refuses to start when a variable is set under the product's
-// old name and not under its current one. It is not a compatibility path: it
-// never reads what the old name holds, only whether it is there, and it stops
-// the process rather than falling back to it. Without this, "-dir" in
-// particular would fail silently — it has a default, so a renamed variable
-// nobody set would just be read as absent and the command would carry on
-// against the wrong directory.
-func rejectOldEnv(lookup func(string) (string, bool)) error {
-	for _, name := range sapedbEnvNames {
-		if value, found := lookup(name); found && value != "" {
-			continue
-		}
-		old := strings.Replace(name, "SAPEDB_", oldEnvPrefix, 1)
-		if value, found := lookup(old); found && value != "" {
-			return fmt.Errorf("sapedb: %s is not read any longer; set %s", old, name)
-		}
-	}
-	return nil
-}
-
 // Run is the whole command. It returns the exit status.
 func Run(args []string, lookup func(string) (string, bool), stdin io.Reader, stdout, stderr io.Writer) int {
 	if err := run(args, lookup, stdin, stdout); err != nil {
@@ -126,10 +89,6 @@ type options struct {
 }
 
 func run(args []string, lookup func(string) (string, bool), stdin io.Reader, stdout io.Writer) error {
-	if err := rejectOldEnv(lookup); err != nil {
-		return err
-	}
-
 	// found && value != "": an explicitly empty variable is not a value, it
 	// is "not set" — a container with SAPEDB_DIR= would otherwise put its
 	// databases in the current directory instead of the documented default.
@@ -457,19 +416,27 @@ func parse(args []string, opts *options) ([]string, error) {
 }
 
 // oldFileExt is the database file extension this product used before it was
-// called sapedb, assembled from single-character literals for the same
-// reason oldEnvPrefix above is: internal/naming would otherwise flag the
-// string that spells it, and a check for the old extension has no business
-// leaving the old extension lying around in the source as plain text.
+// called sapedb, assembled from single-character literals rather than spelled
+// whole: internal/naming would otherwise flag the string that spells it, and
+// a check for the old extension has no business leaving the old extension
+// lying around in the source as plain text.
+//
+// This is now the last place in the tree that still carries the old name at
+// all. The environment-variable twin of this guard was removed along with
+// the rename (there was never a release, so nothing was ever set under the
+// old prefix to be refused); this one is still here because it is also the
+// ordering anchor that keeps a refusal from creating the account folder and
+// the lock, which is a job that has nothing to do with the name. Removing it
+// is a decision about a migration aid, not about a rename.
 var oldFileExt = "." + string([]byte{'r', 's', 'q', 'l'})
 
 // checkOldExtension refuses to open a database when its .sapedb path does
 // not exist but a same-named file under the old extension does.
 //
 // This is the one variant of the old name that fails silently rather than
-// being refused: a renamed environment variable at least gets a signpost
-// (see rejectOldEnv above), and an old connection scheme or signing label
-// gets a parse or verify error, but a missing .sapedb file with a real
+// being refused: an old connection scheme or signing label gets a parse or
+// verify error, and a file carrying the old format tag is refused outright
+// as pager.ErrNotSapedb, but a missing .sapedb file with a real
 // old-extension file sitting right next to it does not look like an error
 // at all — vfs.OpenFile below would simply create a new, empty database and
 // this tool would report an empty database where a real one exists. That is

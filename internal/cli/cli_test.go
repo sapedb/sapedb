@@ -911,142 +911,36 @@ func TestTheWrongSecretIsSaidPlainly(t *testing.T) {
 	}
 }
 
-// oldEnvName mirrors internal/cli's own rejectOldEnv: built from bytes so
-// this file, inside the tree internal/naming walks, does not itself carry
-// the string the whole rename exists to remove.
-func oldEnvName(suffix string) string {
-	return string([]byte{'R', 'S', 'Q', 'L', '_'}) + suffix
-}
-
-// TestTheOldEnvironmentNameIsRefusedNotSilentlyIgnored is the trap the task
-// called out by name: SAPEDB_DIR in particular has a default, so a renamed
-// variable nobody actually set would otherwise be read as simply absent and
-// the command would carry on quietly against the wrong directory.
+// TestABlankVariableIsNotAValue pins the half of get() that survives the
+// old-name guard this file used to carry: `found && value != ""`, so a
+// variable declared with no value reads as "not set" and falls back to the
+// documented default rather than to the empty string.
 //
-// This is a universal claim — every variable this command reads refuses its
-// old name — so it is a table, one row per variable, each row differing in
-// exactly which one is old. A check that happened to compare secret
-// specifically, and nothing else, would pass this file forever while dir or
-// label kept quietly reading the old name underneath it.
-func TestTheOldEnvironmentNameIsRefusedNotSilentlyIgnored(t *testing.T) {
-	base := func(s *setup) map[string]string {
-		return map[string]string{
-			"SAPEDB_SECRET":  secret,
-			"SAPEDB_DIR":     s.dir,
-			"SAPEDB_ACCOUNT": "acme",
-			"SAPEDB_DB":      "main",
-			"SAPEDB_ENCRYPT": "1",
-			"SAPEDB_LABEL":   "another/label",
-		}
+// It uses LABEL rather than DIR on purpose. DIR's fallback is the hard-coded
+// absolute path /var/lib/sapedb, and reaching it here — which "must run"
+// requires, since nothing refuses first — is exactly the system-path
+// dependency this package's tests otherwise avoid. LABEL's fallback is the
+// empty string, so this observes the same branch without touching a real
+// path.
+//
+// This used to be a subtest of the old-environment-name table, which is why
+// it is worth keeping on its own now that the table is gone: the guarantee
+// it measures is about how a blank variable is read, and has nothing to do
+// with what the product used to be called.
+func TestABlankVariableIsNotAValue(t *testing.T) {
+	setup := start(t)
+	vars := map[string]string{
+		"SAPEDB_SECRET":  secret,
+		"SAPEDB_DIR":     setup.dir,
+		"SAPEDB_ACCOUNT": "acme",
+		"SAPEDB_DB":      "main",
+		"SAPEDB_LABEL":   "",
 	}
 
-	for _, suffix := range []string{"DIR", "ACCOUNT", "DB", "ENCRYPT", "SECRET", "LABEL"} {
-		t.Run(suffix, func(t *testing.T) {
-			setup := start(t)
-			vars := base(setup)
-			newName, oldName := "SAPEDB_"+suffix, oldEnvName(suffix)
-			value := vars[newName]
-			delete(vars, newName)
-			vars[oldName] = value
-
-			stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
-			status := Run([]string{"ls"}, setup.envOnly(vars), strings.NewReader(""), stdoutBuf, errBuf)
-			if status == 0 {
-				t.Fatalf("it started with only %s set instead of %s", oldName, newName)
-			}
-			// Not just "the message names both variables" — that survives the
-			// two names being swapped, which points the operator at the wrong
-			// one of the two: it would tell them to go set the very variable
-			// that was just refused. The signpost's whole job is to say which
-			// way to go, so the sentence has to be pinned whole, in order.
-			errs := errBuf.String()
-			want := oldName + " is not read any longer; set " + newName
-			if !strings.Contains(errs, want) {
-				t.Errorf("the refusal does not say %q: %q", want, errs)
-			}
-		})
+	stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
+	if status := Run([]string{"ls"}, setup.envOnly(vars), strings.NewReader(""), stdoutBuf, errBuf); status != 0 {
+		t.Fatalf("a blank SAPEDB_LABEL was not read as unset: %s", errBuf.String())
 	}
-
-	// The control every row above is compared against: all current names,
-	// nothing old, must run. Without this, a bug that refused everything
-	// unconditionally would pass every row above too.
-	t.Run("control: every current name, nothing old", func(t *testing.T) {
-		setup := start(t)
-		stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
-		status := Run([]string{"ls"}, setup.envOnly(base(setup)), strings.NewReader(""), stdoutBuf, errBuf)
-		if status != 0 {
-			t.Fatalf("it refused the current environment names too: %s", errBuf.String())
-		}
-	})
-
-	// Both set, to different values: the new one must win, silently — this
-	// is not a compatibility path, so there must be no complaint at all.
-	t.Run("both set: the current name wins without complaint", func(t *testing.T) {
-		setup := start(t)
-		vars := base(setup)
-		vars[oldEnvName("SECRET")] = "a value nobody should ever read"
-
-		stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
-		status := Run([]string{"ls"}, setup.envOnly(vars), strings.NewReader(""), stdoutBuf, errBuf)
-		if status != 0 {
-			t.Fatalf("setting both refused to start: %s", errBuf.String())
-		}
-	})
-
-	// The new name set to the empty string is "not set", the same as it not
-	// being in the environment at all — get() treats them identically, on
-	// purpose, so a container with SAPEDB_DIR= would not silently run
-	// against the current directory. rejectOldEnv checks that at both ends —
-	// found&&value!="" on the new name, found&&value!="" on the old name —
-	// and the two do NOT fail the same way. This test exercises only the
-	// first: dropping the new-name guard reads a blank SAPEDB_DIR as "set"
-	// and skips straight past a real old-named DIR variable sitting right
-	// next to it, the shape a container ships by accident (an env file that
-	// declares the new key with no value, alongside a leftover old one).
-	t.Run("new name blank, old name has a value: still refused", func(t *testing.T) {
-		setup := start(t)
-		vars := base(setup)
-		newName, oldName := "SAPEDB_DIR", oldEnvName("DIR")
-		vars[newName] = ""
-		vars[oldName] = "/data"
-
-		stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
-		status := Run([]string{"ls"}, setup.envOnly(vars), strings.NewReader(""), stdoutBuf, errBuf)
-		if status == 0 {
-			t.Fatalf("it started with %s blank and %s set to a real value", newName, oldName)
-		}
-		want := oldName + " is not read any longer; set " + newName
-		if !strings.Contains(errBuf.String(), want) {
-			t.Errorf("the refusal does not say %q: %q", want, errBuf.String())
-		}
-	})
-
-	// The mirror image, on the OLD name's guard instead: dropping
-	// found&&value!="" on the old-name check would read a blank old-named
-	// LABEL variable as "set" and refuse to start even though there is
-	// nothing there to conflict with — a container that has never set
-	// anything under the old name at all, but whose env file (or
-	// `env | sort` habit) still declares it blank. This uses LABEL rather
-	// than DIR on purpose: DIR's
-	// fallback is the hard-coded absolute path /var/lib/sapedb (see get(),
-	// and the comment on the one documented mutation survivor next to it),
-	// and reaching that fallback here — which "must run" requires, since
-	// nothing refuses first — is exactly the system-path dependency this
-	// package's tests otherwise avoid. LABEL's fallback is the empty
-	// string, so this observes the same guard without touching a real path.
-	t.Run("new name blank, old name also blank: must run", func(t *testing.T) {
-		setup := start(t)
-		vars := base(setup)
-		newName, oldName := "SAPEDB_LABEL", oldEnvName("LABEL")
-		vars[newName] = ""
-		vars[oldName] = ""
-
-		stdoutBuf, errBuf := &strings.Builder{}, &strings.Builder{}
-		status := Run([]string{"ls"}, setup.envOnly(vars), strings.NewReader(""), stdoutBuf, errBuf)
-		if status != 0 {
-			t.Fatalf("it refused to start with %s and %s both blank, neither one a real value: %s", newName, oldName, errBuf.String())
-		}
-	})
 }
 
 func TestWhatIsNotACommandIsExplained(t *testing.T) {

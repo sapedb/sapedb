@@ -810,19 +810,27 @@ func (s *Server) granted(live *session, asked call, name string) ([]string, erro
 }
 
 // oldFileExt is the database file extension this product used before it was
-// called sapedb, assembled from single-character literals for the same
-// reason oldEnvPrefix above is: internal/naming would otherwise flag the
-// string that spells it, and a check for the old extension has no business
-// leaving the old extension lying around in the source as plain text.
+// called sapedb, assembled from single-character literals rather than spelled
+// whole: internal/naming would otherwise flag the string that spells it, and
+// a check for the old extension has no business leaving the old extension
+// lying around in the source as plain text.
+//
+// This is now the last place in the tree that still carries the old name at
+// all. The environment-variable twin of this guard was removed along with
+// the rename (there was never a release, so nothing was ever set under the
+// old prefix to be refused); this one is still here because it is also the
+// ordering anchor that keeps a refusal from creating the account folder and
+// the lock, which is a job that has nothing to do with the name. Removing it
+// is a decision about a migration aid, not about a rename.
 var oldFileExt = "." + string([]byte{'r', 's', 'q', 'l'})
 
 // checkOldExtension refuses to open a database when its .sapedb path does
 // not exist but a same-named file under the old extension does.
 //
 // This is the one variant of the old name that fails silently rather than
-// being refused: a renamed environment variable at least gets a signpost
-// (see rejectOldEnv above), and an old connection scheme or signing label
-// gets a parse or verify error, but a missing .sapedb file with a real
+// being refused: an old connection scheme or signing label gets a parse or
+// verify error, and a file carrying the old format tag is refused outright
+// as pager.ErrNotSapedb, but a missing .sapedb file with a real
 // old-extension file sitting right next to it does not look like an error
 // at all — openFile below would simply create a new, empty database at the .sapedb
 // path and this server would answer every call about a real database as if

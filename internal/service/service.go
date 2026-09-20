@@ -34,40 +34,6 @@ var (
 	ErrNotDuration = errors.New("sapedb: that is not a length of time")
 )
 
-// oldEnvPrefix is the environment prefix this product read before it was
-// called sapedb, assembled from single-character literals rather than spelled
-// whole — see the identical constant and its comment in internal/cli, which
-// this mirrors because the two binaries read overlapping variables under
-// separate flag parsing and neither imports the other's package for it.
-var oldEnvPrefix = string([]byte{'R', 'S', 'Q', 'L', '_'})
-
-// sapedbEnvNames are every product variable the server reads, walked once
-// here instead of once per call to get(), so the set this refuses old names
-// for cannot drift from the set FromEnv actually reads.
-var sapedbEnvNames = []string{
-	"SAPEDB_ADDR", "SAPEDB_DIR", "SAPEDB_SECRET", "SAPEDB_LABEL",
-	"SAPEDB_TLS_CERT", "SAPEDB_TLS_KEY", "SAPEDB_INSECURE", "SAPEDB_ENCRYPT", "SAPEDB_SHUTDOWN",
-}
-
-// rejectOldEnv refuses to start when a variable is set under the product's
-// old name and not under its current one. It never reads what the old name
-// holds, only whether it is there, and it stops the process rather than
-// falling back to it — every one of these variables has a usable default or
-// a zero value, so silently ignoring an old name would not fail loudly, it
-// would just serve from the wrong place.
-func rejectOldEnv(lookup func(string) (string, bool)) error {
-	for _, name := range sapedbEnvNames {
-		if value, found := lookup(name); found && value != "" {
-			continue
-		}
-		old := strings.Replace(name, "SAPEDB_", oldEnvPrefix, 1)
-		if value, found := lookup(old); found && value != "" {
-			return fmt.Errorf("sapedb: %s is not read any longer; set %s", old, name)
-		}
-	}
-	return nil
-}
-
 // Config is everything the server is told before it starts.
 type Config struct {
 	Address string
@@ -92,10 +58,6 @@ type Config struct {
 
 // FromEnv reads the configuration. `lookup` is os.LookupEnv in a real process.
 func FromEnv(lookup func(string) (string, bool)) (Config, error) {
-	if err := rejectOldEnv(lookup); err != nil {
-		return Config{}, err
-	}
-
 	get := func(name, fallback string) string {
 		if value, found := lookup(name); found && value != "" {
 			return value

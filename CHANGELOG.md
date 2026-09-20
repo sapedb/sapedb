@@ -51,6 +51,25 @@ recorded, so its absence is not a claim that nothing changed before it.
   derivation scheme itself did not change, and `Format` is still 1. Only the
   name inside them moved.
 
+- **Environment variables under the product's former prefix are no longer
+  refused by name.** Both binaries used to stop, and name the variable to set
+  instead, when they found one set under the old prefix. That signpost is
+  gone along with the prefix it had to spell in order to look for it.
+
+  The consequence is limited to a variable still set under the old name: it
+  is now simply not read. A secret set that way gets
+  `sapedb: SAPEDB_SECRET is not set` rather than a sentence naming both, and
+  a directory set that way falls back to `/var/lib/sapedb` silently, which is
+  the case the signpost was originally written for. For the same reason as
+  above — there has never been a release — nothing can be set under the old
+  prefix by anyone who has run a published build.
+
+  This entry deliberately does not spell the old prefix out. `internal/naming`
+  walks every file in the tree, this one included, and the rename is only
+  finished when nothing left in it carries that name — a changelog describing
+  the removal is not an exception to that, it is the last place that would
+  quietly become one.
+
 - **A `count` must now declare a `limit`.** A declaration with
   `"action": "count"` and no positive `"limit"` is refused when it is
   declared — through `sapedb apply`, through the `Declare` frame, and
