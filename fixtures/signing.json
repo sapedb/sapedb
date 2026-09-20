@@ -11,10 +11,10 @@
     {
       "name": "plain",
       "accountId": "11111111-1111-4111-8111-111111111111",
-      "password": "matkhau-don-gian",
+      "password": "a-simple-password",
       "dbname": "22222222-2222-4222-8222-222222222222",
-      "derived": "9f2feb72b2bcc1bcfbd34a3fe9a14782184581562d375baff0584ea298452129",
-      "direct": "098384caaf3da5647d25a4d4546979611f9c36383a5a9e1338177e6dc056fcd1"
+      "derived": "2c51e06f8a6d47497a8eebd6d2945fb9e8d1c7bdbf120caa1126ac9640bc1d62",
+      "direct": "6e86f9762cccd8872df8fffa9e44a61699078f1289c2c8634c3794f63642283b"
     },
     {
       "name": "every allowed character class",
