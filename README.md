@@ -129,6 +129,20 @@ the server's own secret before it may; every access it makes goes into the
 change log with a name against it; and `declare` prints the operation that would
 do what you just did, so exploring ends in something to commit.
 
+**Build identity** is what a binary answers when asked which one it is. The
+version is written in by the linker from the tag being built, `sapedb version`
+prints it, `sapedbd` says it on the first line of its log, and the welcome every
+client gets carries it as `productVersion` — which is not the `version` beside
+it in that same frame: that one is the protocol, it has been 1 since there was a
+frame, and it is why two servers built six months apart used to introduce
+themselves identically. Build with `make dist`, or stamp it by hand:
+
+    go build -ldflags "-X github.com/sapedb/sapedb/internal/build.Version=$(git describe --tags)" ./cmd/...
+
+A binary nobody stamped says `dev`, which is a word no release will be called.
+Nothing here checks for or installs a newer version; asking what this is and
+going to get another one are different jobs, and only the first one is here.
+
 **Encryption at rest** is AES-GCM per page under a key derived from the secret.
 The meta page is not encrypted, on purpose — something has to be readable
 without the key or "not our file" and "wrong key" become one answer.

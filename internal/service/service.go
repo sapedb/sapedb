@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sapedb/sapedb/internal/build"
 	"github.com/sapedb/sapedb/internal/server"
 	"github.com/sapedb/sapedb/internal/signing"
 )
@@ -186,8 +187,14 @@ func (s *Service) Serve(ctx context.Context, announce io.Writer) error {
 		if s.config.CertFile == "" {
 			scheme = "sapedb (no TLS)"
 		}
-		fmt.Fprintf(announce, "sapedb listening on %s as %s, databases in %s\n",
-			s.Address(), scheme, s.config.Dir)
+		// The build comes first, before anything about this particular run.
+		// A daemon has no `version` subcommand to ask — its only argument
+		// surface is the environment, and it is usually a container nobody
+		// has a shell into — so the first line of its log is where the
+		// question "which build is this" has to be answerable from. It is
+		// also the one line that is kept when a log is pasted into a report.
+		fmt.Fprintf(announce, "sapedb %s listening on %s as %s, databases in %s\n",
+			build.Version, s.Address(), scheme, s.config.Dir)
 	}
 
 	done := make(chan error, 1)

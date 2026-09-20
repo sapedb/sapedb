@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sapedb/sapedb/internal/build"
 	"github.com/sapedb/sapedb/internal/dbkey"
 	"github.com/sapedb/sapedb/internal/dbname"
 	"github.com/sapedb/sapedb/internal/pager"
@@ -62,6 +63,14 @@ type Options struct {
 	// secret. It protects a stolen disk, not a compromised server — the server
 	// can read every database it serves, by construction.
 	Encrypt bool
+
+	// ProductVersion is what this build calls itself in the welcome. Empty
+	// means build.Version, which is what every real server wants: the value
+	// the linker stamped into this binary. It is a field rather than a
+	// straight read of build.Version so that a test can stamp a value of its
+	// own without building a binary, and so that the handshake has one
+	// obvious place the answer comes from.
+	ProductVersion string
 
 	// Notice is where the server says things that are nobody's request and
 	// somebody's business — a database that was not closed cleanly, most of
@@ -131,6 +140,14 @@ func New(options Options) (*Server, error) {
 	}
 	if err := os.MkdirAll(options.Dir, 0o700); err != nil {
 		return nil, err
+	}
+	// Defaulted here rather than at the handshake, so that every server in
+	// this process answers the same thing and there is one line to read to
+	// find out what that is. A caller that wants to say something else says
+	// it in Options; nothing may leave this empty, because a welcome with no
+	// product version is the very silence this field was added to end.
+	if options.ProductVersion == "" {
+		options.ProductVersion = build.Version
 	}
 
 	held, err := vfs.LockDir(options.Dir)
@@ -511,6 +528,20 @@ type welcome struct {
 	// because a challenge is not a secret and deciding who gets one would mean
 	// the server knew who was asking before they had proved anything.
 	Challenge string `json:"challenge,omitempty"`
+
+	// ProductVersion is which build of the server this is, as opposed to
+	// Version above, which is what the frame is written in. They are not the
+	// same question and were never going to move together: the frame layout
+	// has been 1 since there was a frame, so until this field two servers
+	// built half a year apart introduced themselves identically and a client
+	// had nothing to write in a report.
+	//
+	// Not omitempty, on purpose. A field that vanishes when it is empty is a
+	// field a client cannot tell from a server too old to have it, and the
+	// server never sends it empty anyway (see New). Added, never renamed,
+	// never removed: a client that does not know this field ignores it, which
+	// is measured — see TestAClientThatPredatesTheProductVersionStillReadsTheWelcome.
+	ProductVersion string `json:"productVersion"`
 }
 
 // How a connection is scoped.
@@ -546,6 +577,7 @@ func (s *Server) handshake(reader *protocol.Reader, out *sender) (*session, erro
 	greeting := welcome{
 		Version: protocol.Version, Account: opening.Account, Mode: opening.Mode,
 		Encrypted: s.options.Encrypt, Challenge: hex.EncodeToString(live.challenge),
+		ProductVersion: s.options.ProductVersion,
 	}
 
 	switch opening.Mode {

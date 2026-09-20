@@ -11,11 +11,26 @@ COPY go.mod go.sum ./
 COPY internal ./internal
 COPY cmd ./cmd
 
+# VERSION is what the server inside this image says it is, in the welcome it
+# sends every client. The default is what an unstamped build says anyway, so
+# an image built without --build-arg is honest about being unidentifiable
+# rather than claiming a release it is not. `make image` passes the real one.
+#
+# .git is not copied into this stage on purpose — it is not source, and the
+# build must not depend on it — so the version comes in as an argument rather
+# than being discovered here.
+ARG VERSION=dev
+
 # Static: the runtime image has no dynamic loader to find a library with.
 # Stripped: the symbol table is of no use in production and is of some use to
 # whoever is reading the binary.
+#
+# The -X path is internal/build.Path. Docker cannot read a Go constant either;
+# the same test guards this line as guards the Makefile's.
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /sapedbd ./cmd/sapedbd
+RUN go build -trimpath \
+	-ldflags="-s -w -X github.com/sapedb/sapedb/internal/build.Version=${VERSION}" \
+	-o /sapedbd ./cmd/sapedbd
 
 # The data directory is made here, with its ownership, because the runtime
 # image has no shell to make one in.

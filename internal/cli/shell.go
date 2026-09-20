@@ -424,6 +424,25 @@ func checkShell(_ options, args []string) error {
 	return nil
 }
 
+// connectedLine is what a session says about the server it reached, given the
+// product version that server declared in its welcome.
+//
+// A function of a string, separate from shell(), because the interesting case
+// is the one shell() cannot be made to produce from inside this repository: a
+// server that sends no product version at all. Every server this tree can
+// start sends one (see server.New), so the empty case would otherwise be a
+// branch nothing here could reach — and it is exactly the case that matters,
+// because it is what a build from before that field looks like.
+func connectedLine(version string) string {
+	if version == "" {
+		// Not an error. A server from before the welcome carried this is a
+		// server this shell can still talk to, and saying so is more use
+		// than printing nothing and letting the absence read as a version.
+		return "connected to a server that does not say which build it is"
+	}
+	return "connected to sapedb " + version
+}
+
 // shell is the command.
 func shell(opts options, args []string, in io.Reader, out io.Writer) error {
 	address := "localhost:7433"
@@ -439,6 +458,15 @@ func shell(opts options, args []string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	defer func() { _ = client.Close() }()
+
+	// Said before the shell's own banner, because it is the one fact about
+	// this session that the operator cannot get from anywhere else once the
+	// session is over. The server's build, not this tool's: the two are
+	// deployed separately and a report that names only the tool names the
+	// wrong half. Printed rather than merely available on the client, so
+	// that it is in the transcript an operator pastes into a bug report
+	// without having had to think of asking for it.
+	fmt.Fprintln(out, connectedLine(client.Welcome().ProductVersion))
 
 	return Shell(client, opts.db, in, out)
 }

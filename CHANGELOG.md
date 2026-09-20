@@ -131,6 +131,50 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A build can say which build it is.** Until now it could not, and the
+  measurement is the whole point: two binaries compiled six months apart
+  introduced themselves to a client with byte-identical words. The `version`
+  field in the welcome is the **protocol** version — `protocol.Version`, the
+  constant `1`, what a frame's layout is written in — and it has not moved
+  since there was a frame, nor should it. There was no `version` command in
+  `cmd/sapedb` at all. So a bug report could name what the database did and
+  never what did it, and an operator holding a binary had no way to ask it.
+
+  Three things now answer, and they all answer with the same value:
+
+  - `sapedb version` prints it. It is the only command in that tool that
+    names no database, so it runs before the secret, the account and the name
+    are required — which is the state anyone asking the question is usually
+    in.
+  - `sapedbd` says it on the first line of its log, since a daemon has no
+    subcommand to ask and is usually a container nobody has a shell into.
+  - the **welcome carries it as `productVersion`**, so any connected client
+    reads it at the handshake, with nothing to ask for and nothing to prove
+    first. `sapedb shell` prints it as `connected to sapedb <version>`.
+
+  The value is written in by the linker (`-X
+  github.com/sapedb/sapedb/internal/build.Version=...`), from the tag being
+  built; `make dist` and the Dockerfile do it, and `make image` passes it
+  through as a build argument. A binary nobody stamped says `dev` — a word no
+  release will be called, so an unstamped build is recognisable as one instead
+  of claiming a number.
+
+  **This is a wire change, and it is an added field only.** Nothing is renamed
+  and nothing is removed. A client compiled against the old welcome ignores
+  `productVersion` and reads everything it came for —
+  `TestAClientThatPredatesTheProductVersionStillReadsTheWelcome` decodes a real
+  welcome into a hand-written copy of the old struct and checks the protocol
+  version, the account, the name, the mode and the challenge all still arrive.
+  `fixtures/frames.json` is unchanged: it carries `welcome` in its type table
+  but has never had a case with a welcome body in it, so there was nothing
+  there to update. **The client fixture in the TypeScript repository therefore
+  needs no change either** — but a client that wants to read the new field
+  needs it added to its own welcome type.
+
+  Not included, deliberately: nothing checks for a newer version and nothing
+  updates itself. Asking what this is and going to fetch another one are
+  different jobs, and the second one is not a job a database server should do.
+
 - **Scopes can be reached over the wire.** An operation has been able to
   declare `scopes` for as long as there have been operations, and
   `store.allowed` has checked them fail-closed the whole time — but nothing on

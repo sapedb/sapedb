@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sapedb/sapedb/internal/build"
 	"github.com/sapedb/sapedb/internal/dbkey"
 	"github.com/sapedb/sapedb/internal/dbname"
 	"github.com/sapedb/sapedb/internal/pager"
@@ -46,6 +47,7 @@ const usage = `sapedb — set up and look inside a database
   sapedb [options] log [FROM]        print the change log from an entry onwards
   sapedb [options] url               print a signed connection string
   sapedb [options] shell [HOST]      look inside a running server
+  sapedb [options] version           which build this is
 
 options
   -dir DIR       where databases live      (SAPEDB_DIR, default /var/lib/sapedb)
@@ -131,6 +133,23 @@ func run(args []string, lookup func(string) (string, bool), stdin io.Reader, std
 	if len(rest) == 0 {
 		return fmt.Errorf("%w: no command", ErrUsage)
 	}
+
+	// A standalone command runs here, above the three gates below, because
+	// none of them is about it. It still goes through findCommand and still
+	// runs its own check, so an argument it does not take is refused the
+	// same way every other command's is; what it skips is the secret, the
+	// account and the name, which a question about the binary itself has no
+	// business demanding. Unknown names fall through to the gates on
+	// purpose: "no command called %q" is decided below, in one place, so a
+	// typo does not get a different error depending on whether a secret
+	// happened to be set.
+	if entry, found := findCommand(rest[0]); found && entry.standalone {
+		if err := entry.check(opts, rest[1:]); err != nil {
+			return err
+		}
+		return entry.run(opts, nil, rest[1:], stdin, stdout)
+	}
+
 	if opts.secret == "" {
 		return ErrSecret
 	}
@@ -212,6 +231,13 @@ type command struct {
 	// opts alone, and shell talks to a server over the network, never to a
 	// file on this host.
 	opens bool
+	// standalone says this command is about the tool, not about a database,
+	// so it runs before run() insists on a secret, an account and a name.
+	// Everything else in this table is about one database and is right to be
+	// refused without one; version is not, and a version command that cannot
+	// answer until the caller has set three environment variables is a
+	// version command nobody can use at the moment they need it.
+	standalone bool
 	// check is everything about a call that can be judged from opts and
 	// the arguments alone, with no database open. It runs before open(),
 	// every time, for every command — including the three that had no
@@ -293,6 +319,23 @@ var commands = []command{
 			// the database an operator wants to look inside is the one
 			// that is serving.
 			return shell(opts, args, in, out)
+		},
+	},
+	{
+		name:  "version",
+		opens: false,
+		// The only command in this table that names no database, which is
+		// what standalone says and why it is not merely opens:false. url and
+		// shell also leave the file alone, but they still need an account, a
+		// name and a secret to sign or connect with. Asking a binary what it
+		// is must work before any of those exist — on a host with no
+		// databases, in a container someone is trying to identify, in a bug
+		// report written by somebody who was never given the secret.
+		standalone: true,
+		check:      checkNoArguments("version"),
+		run: func(_ options, _ *store.Store, _ []string, _ io.Reader, out io.Writer) error {
+			_, err := fmt.Fprintf(out, "sapedb %s\n", build.Version)
+			return err
 		},
 	},
 }

@@ -93,6 +93,18 @@ type Welcome struct {
 	LSN       uint64 `json:"lsn,omitempty"`
 	Encrypted bool   `json:"encrypted"`
 	Challenge string `json:"challenge,omitempty"`
+
+	// ProductVersion is which build of the server answered, not what the
+	// frame is written in — that is Version, and it is a protocol number that
+	// barely ever moves. A caller reads this to write down what it was
+	// talking to; the client itself does not branch on it, and should not:
+	// behaviour that differs between builds belongs in something the server
+	// declares it can do, not in a client parsing a version string.
+	//
+	// Empty means a server from before this field existed. Nothing here
+	// refuses such a server — see Dial, which decodes the welcome and cares
+	// about nothing it does not know.
+	ProductVersion string `json:"productVersion,omitempty"`
 }
 
 // Options are what a connection needs beyond the string.

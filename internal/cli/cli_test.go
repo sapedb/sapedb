@@ -1661,6 +1661,12 @@ var rejectionCases = map[string]rejectionCase{
 		wants: "never given as an argument",
 	},
 	"shell": {args: []string{"shell", "localhost:1", "-nope"}, wants: "shell takes host:port and optionally -insecure"},
+	// version runs before the secret/account/name gates, so its rejection
+	// case is the one that proves skipping those gates did not also skip
+	// the argument check: "version junk" must still be refused, and refused
+	// by checkNoArguments rather than by something further down that
+	// version never reaches.
+	"version": {args: []string{"version", "junk"}, wants: "version takes no arguments"},
 }
 
 // TestEveryCommandInTheTableHasARejectionCase is G2. A command added to
