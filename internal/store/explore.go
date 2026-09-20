@@ -20,11 +20,24 @@ import (
 // difference is when the parameters arrive.
 //
 // That is not a restriction bolted on afterwards. Explore builds the Operation
-// the typed access would have to be declared as, checks it with the same
-// validation a declaration gets, and runs it down the same path. An access
-// that could not be declared cannot be typed, because there is nowhere for it
-// to go. And the declaration it built is handed back, so exploring ends in
-// something to commit rather than in a habit of poking at production.
+// the typed access would have to be declared as, runs it through
+// validateOperation, and runs it down the same path. An access that could not
+// be declared cannot be typed, because there is nowhere for it to go. And the
+// declaration it built is handed back, so exploring ends in something to
+// commit rather than in a habit of poking at production.
+//
+// One rule is not the same here, and saying so is the point of this paragraph:
+// the limit. asOperation caps Limit at MostRows when it is missing or too
+// large, BEFORE validateOperation runs, so "a scan must declare how many rows
+// it may return" can never fire through Explore — no matter what an operator
+// types. That is deliberate for a shell (see asOperation's own comment: an
+// operator who does not say is not asking for everything) and wrong for a
+// declaration, which is a promise about cost somebody else has to keep. This
+// paragraph used to read "checks it with the same validation a declaration
+// gets", full stop, and that sentence was wrong for exactly this rule for as
+// long as it stood. The asymmetry is now measured, side by side, in
+// internal/server's TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn
+// — added with the Declare frame, which does NOT cap and must not.
 //
 // Two things follow from it being the same engine:
 //
