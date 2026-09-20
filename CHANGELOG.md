@@ -23,6 +23,31 @@ recorded, so its absence is not a claim that nothing changed before it.
   every `*.go` file at the module root and fails on any exported name added,
   removed or renamed.
 
+- `internal/server`'s per-database lock is now a `sync.RWMutex` instead of a
+  `sync.Mutex` (task 0070 §1). A call still has to look its operation up
+  before anyone can say whether it reads or writes, and that lookup is itself
+  a read of the declaration tree — so `invoke()` takes the read lock first,
+  asks `Store.SharedRead` what it found and whether this call may share, and
+  either runs it right there (still under the read lock, via the new
+  `Store.Run`, which performs an operation `SharedRead` already looked up and
+  allowed — added so a call that shares does not pay for the lookup twice) or
+  drops to the write lock and re-invokes normally. Sharing needs both: the
+  action must not write (`writes()` already decided that), and the
+  collection must not be partitioned — a `get`/`scan` against a partitioned
+  collection reaches `Collection.into`, which can open a partition file for
+  the first time (mutating the store's open-partition map) and run expiry
+  (which can unlink one), so it is a write wearing a read's name. Dropping
+  that second check reproduces a real `-race` failure on
+  `Store.Part`'s open-partition map — kept as a mutant during measurement,
+  not part of this repo. Guarded by `TestReadsRunTogether`
+  (`internal/server/parallel_reads_test.go`), which times whether N
+  concurrent reads of one database cost N times one read's time (queueing)
+  or close to one read's time (sharing) over a real socket, and
+  `TestPartitionedReadsAreWrites` (`internal/server/partition_reads_test.go`),
+  which is the `-race` positive case for the partition check above. See
+  README.md's "Every write is a transaction" paragraph for what this does
+  and does not change about read/write ordering.
+
 ### Fixed
 
 - `apply` (`internal/cli/cli.go`) printed `collection NAME` and

@@ -78,7 +78,7 @@ type Server struct {
 
 // database is one open file and the lock that keeps its single writer single.
 type database struct {
-	mutex sync.Mutex
+	mutex sync.RWMutex
 	pages *pager.Pager
 	store *store.Store
 	file  vfs.File
@@ -614,16 +614,40 @@ func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
 	}
 	opened := live.opening
 
-	// One writer at a time per database, which is what the engine underneath
-	// allows. Connections to one database queue here rather than racing.
-	db.mutex.Lock()
-	defer db.mutex.Unlock()
-
 	// Scopes are not taken from the request: a caller that names its own
 	// permissions has none. Until a token carries them, an operation that
 	// declares a scope cannot be reached over the wire at all — which is the
 	// safe direction to be incomplete in.
 	caller := store.Caller{Actor: opened.Account, WriteID: asked.WriteID}
+
+	// Readers share, writers take the database to themselves. Which of the
+	// two this call is cannot be known before the operation is looked up, and
+	// the lookup is itself a read of the tree — so it happens under the read
+	// lock. A call that turns out to read runs right there, on the operation
+	// already in hand. One that writes drops the read lock, takes the write
+	// lock, and looks the operation up again, because a declaration could have
+	// changed in between and the one it ran must be the one it holds the lock
+	// for.
+	db.mutex.RLock()
+	operation, shared, err := db.store.SharedRead(caller, asked.Command, asked.Version)
+	if err != nil {
+		db.mutex.RUnlock()
+		return nil, err
+	}
+	if shared {
+		result, err := db.store.Run(caller, operation, asked.Arguments)
+		db.mutex.RUnlock()
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	db.mutex.RUnlock()
+
+	// One writer at a time per database, which is what the engine underneath
+	// allows. Connections to one database queue here rather than racing.
+	db.mutex.Lock()
+	defer db.mutex.Unlock()
 
 	result, err := db.store.Invoke(caller, asked.Command, asked.Version, asked.Arguments)
 	if err != nil {

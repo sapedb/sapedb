@@ -425,3 +425,40 @@ func rowOf(row Totals) map[string]any {
 	}
 	return made
 }
+
+// SharedRead is the operation a call names, and whether it can run while
+// other readers run.
+//
+// Two things have to hold for it to be shared. The action must not change
+// anything — that is what writes() already decides. And the collection must
+// not be partitioned: for a partitioned collection even a get goes through
+// Collection.into, which opens the partition file if it is not open yet
+// (mutating the open set, and creating the file when it is new) and then runs
+// expiry, which drops files. A "read" there is a writer wearing a reader's
+// name.
+//
+// The operation comes back so that a caller which decided to share does not
+// have to look it up a second time: the lookup is itself a read of the tree,
+// and paying for it twice on every call is most of what a cheap read costs.
+func (s *Store) SharedRead(caller Caller, name string, version int) (Operation, bool, error) {
+	operation, found, err := s.Operation(name, version)
+	if err != nil || !found {
+		return Operation{}, false, err
+	}
+	if err := allowed(caller, operation); err != nil {
+		return Operation{}, false, err
+	}
+	if writes(operation.Action) {
+		return operation, false, nil
+	}
+	collection, err := s.Collection(operation.Collection)
+	if err != nil {
+		return Operation{}, false, err
+	}
+	return operation, collection.spec.Partition == nil, nil
+}
+
+// Run performs an operation SharedRead already found and allowed.
+func (s *Store) Run(caller Caller, operation Operation, arguments map[string]any) (Result, error) {
+	return s.perform(caller, operation, arguments)
+}
