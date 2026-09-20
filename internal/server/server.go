@@ -49,6 +49,21 @@ var (
 	// finds out by way of every scoped operation refusing it, with nothing
 	// anywhere saying the grant was the problem.
 	ErrGrant = errors.New("sapedb/server: that grant was not issued for this account and database")
+	// ErrGrantExpired is a grant that verifies and has run out. A separate
+	// condition from ErrGrant, reported under a code of its own, because a
+	// caller does different things about the two: an expired grant is a
+	// reason to go back to whoever issues them and ask for another, and a
+	// grant that was never for this account or these scopes is a reason to
+	// stop. Telling a program to tell them apart by reading the prose is how
+	// ISS-21 happened.
+	//
+	// It deliberately does NOT wrap ErrGrant. It could — "an expired grant is
+	// a kind of grant failure" reads well — but codeFor walks its table in
+	// order with errors.Is, so a wrapped sentinel is correct only for as long
+	// as nobody moves the two rows past each other, and a code table that is
+	// right by row order is a code table that goes wrong in a diff that looks
+	// like tidying. Two independent sentinels have no order to get wrong.
+	ErrGrantExpired = errors.New("sapedb/server: that grant has expired")
 )
 
 // Options are what a server needs to run.
@@ -746,8 +761,20 @@ type call struct {
 // — so a connection that reaches four databases needs four grants, and there
 // is nowhere at the handshake to put them.
 type grant struct {
-	Scopes    []string `json:"scopes,omitempty"`
-	Signature string   `json:"sig,omitempty"`
+	Scopes []string `json:"scopes,omitempty"`
+	// Expires is when this grant stops being one, as whole Unix seconds UTC,
+	// and Serial names this particular grant. Both are inside the signature,
+	// so neither is a claim the caller can adjust: editing either one leaves a
+	// signature that covers the other numbers.
+	//
+	// Neither is `omitempty`, unlike every optional field around them. They
+	// are not optional — a grant without an expiry is the thing this field
+	// exists to abolish — and a client that leaves one out sends a zero, which
+	// is refused, rather than sending nothing and being treated as a grant of
+	// the older shape. There is no older shape to be treated as.
+	Expires   int64  `json:"exp"`
+	Serial    string `json:"serial"`
+	Signature string `json:"sig,omitempty"`
 }
 
 func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
@@ -887,7 +914,7 @@ func (s *Server) reached(live *session, asked call) string {
 // granted is the scopes a call may present, which is none unless the server's
 // own secret says otherwise.
 //
-// Three answers, and the middle one is the point:
+// Four answers, and the middle two are the point:
 //
 //   - no grant: no scopes. An operation that declares one is refused, by
 //     store.allowed, in its own words. This is what every caller that has not
@@ -899,17 +926,39 @@ func (s *Server) reached(live *session, asked call) string {
 //     edited, truncated, made up) needs to hear about the grant, and it hears
 //     about nothing if the call goes on to fail somewhere else for a reason
 //     that is true but not the reason.
-//   - a grant that verifies: exactly the scopes in it, and nothing else about
-//     the call is allowed to add to them.
+//   - a grant that verifies and has run out: the call is refused, under
+//     ErrGrantExpired and the code grant_expired rather than under ErrGrant.
+//     A caller does a different thing about each: an expired grant is a
+//     reason to go back to whoever issues them, and a grant that was never
+//     for this account is a reason to stop. Telling the two apart by reading
+//     the prose is what ISS-21 was about.
+//   - a grant that verifies and is still good: exactly the scopes in it, and
+//     nothing else about the call is allowed to add to them.
 //
-// Checked against the account this connection proved and the database this
-// call reached, so a grant is never worth more than where it was minted for.
+// Checked against the account this connection proved, the database this call
+// reached, and this server's own clock — so a grant is never worth more than
+// where it was minted for, nor for longer than it was minted for. The clock
+// is handed to signing rather than read there, which is also what makes the
+// expiry testable without waiting for one.
 func (s *Server) granted(live *session, asked call, name string) ([]string, error) {
 	if asked.Grant == nil {
 		return nil, nil
 	}
-	held := signing.Held{AccountID: live.opening.Account, DBName: name, Scopes: asked.Grant.Scopes}
-	if !signing.Grants(asked.Grant.Signature, held, s.options.Secret) {
+	held := signing.Held{
+		AccountID: live.opening.Account,
+		DBName:    name,
+		Scopes:    asked.Grant.Scopes,
+		Expires:   time.Unix(asked.Grant.Expires, 0),
+		Serial:    asked.Grant.Serial,
+	}
+	switch err := signing.Grants(asked.Grant.Signature, held, s.options.Secret, time.Now()); {
+	case errors.Is(err, signing.ErrExpired):
+		// The expiry and the two clocks come from signing, which is where
+		// both are known; what is added here is the account and the database,
+		// which is what tells an operator WHICH grant of the several a caller
+		// may hold has run out.
+		return nil, fmt.Errorf("%w: %q on %q: %v", ErrGrantExpired, live.opening.Account, name, err)
+	case err != nil:
 		return nil, fmt.Errorf("%w: %q on %q", ErrGrant, live.opening.Account, name)
 	}
 	return asked.Grant.Scopes, nil
@@ -1128,8 +1177,20 @@ func (s *Server) Sign(account, password, name string) (string, error) {
 // because a server holds the secret; that is the same reason a server could
 // always mint a connection string for any database it serves. It is not a way
 // for a connection to obtain one — nothing on the wire reaches this.
-func (s *Server) Grant(account, name string, scopes []string) (string, error) {
-	return signing.Granting(signing.Held{AccountID: account, DBName: name, Scopes: scopes}, s.options.Secret)
+//
+// The expiry and the serial are the caller's to choose and neither has a
+// default here. An expiry this method picked for itself would be a policy
+// hidden in a signature; a serial it generated would be one the issuer never
+// saw and so could never name in a revocation list. Both are refused when
+// unusable rather than filled in.
+func (s *Server) Grant(account, name string, scopes []string, expires time.Time, serial string) (string, error) {
+	return signing.Granting(signing.Held{
+		AccountID: account,
+		DBName:    name,
+		Scopes:    scopes,
+		Expires:   expires,
+		Serial:    serial,
+	}, s.options.Secret)
 }
 
 func write(conn io.Writer, frame protocol.Frame, payload []byte) error {
@@ -1179,6 +1240,7 @@ func codeFor(err error) string {
 		{store.ErrNotAllowed, "not_allowed"},
 		{ErrNotOperator, "not_operator"},
 		{ErrGrant, "grant"},
+		{ErrGrantExpired, "grant_expired"},
 		{store.ErrExists, "exists"},
 		{store.ErrMissing, "missing"},
 		{store.ErrCondition, "condition"},

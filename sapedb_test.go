@@ -19,9 +19,9 @@ import (
 // surfaceNames is how many names this package promises. It is written once
 // and read by the test and by what the test prints, because a number repeated
 // in prose is one that goes stale in the prose rather than in the check.
-const surfaceNames = 39
+const surfaceNames = 40
 
-// TestTheSurfaceIsExactlyTheseThirtyNineNames fails when a name is added to this
+// TestTheSurfaceIsExactlyTheseFortyNames fails when a name is added to this
 // package, removed from it, or renamed. It is not a style rule: every name
 // here is a promise this project cannot take back without breaking somebody's
 // build, so adding one has to be a decision somebody made on purpose, not a
@@ -38,8 +38,8 @@ const surfaceNames = 39
 // package scope (types, the two functions), and method names on *Client,
 // which live in Client's own namespace and so can reuse a package-scope name
 // (Welcome the type alias, Welcome the method) without collision. Both are
-// counted: 23 aliases + Parse + Dial + Client + Explored = 27 package-scope
-// names, plus 12 methods on Client = 39. It was 30 until Declare — the frame
+// counted: 24 aliases + Parse + Dial + Client + Explored = 28 package-scope
+// names, plus 12 methods on Client = 40. It was 30 until Declare — the frame
 // that lets an operation be declared on a server that is already running —
 // and then InvokeVersion, which is how a caller reaches the older versions a
 // redeclaration leaves behind, each gave Client a method. The thirty-third is
@@ -49,7 +49,16 @@ const surfaceNames = 39
 // of Declare: an operation could be declared on a running server and a
 // collection could not.
 //
-// The last five are one decision, task SAPE-26: the server has carried
+// The fortieth is Grant, task ISS-11: a grant now carries an expiry and a
+// serial alongside its scopes and its signature, and Present takes the four
+// together rather than as four arguments. Two of those four are strings, and
+// Present(scopes, exp, serial, sig) compiles just as happily with the last two
+// the wrong way round — what it would produce is a grant that silently never
+// verifies. A named field per value is the cheapest way to make that
+// unwritable, and it is also what lets a sixth field arrive later without
+// changing this method's signature again.
+//
+// The five before it are one decision, task SAPE-26: the server has carried
 // Subscribe and Event frames since before this package existed and no client
 // here could read them, so nothing had ever turned an Event back into a
 // change. Subscribe and NextChange are how a caller reads the feed; Change is
@@ -58,13 +67,13 @@ const surfaceNames = 39
 // with. The three aliases are not decoration: a method signature naming
 // store.Change would put a path nobody outside this repository can open into
 // this package's documentation, which is the whole reason Client is a wrapper.
-func TestTheSurfaceIsExactlyTheseThirtyNineNames(t *testing.T) {
+func TestTheSurfaceIsExactlyTheseFortyNames(t *testing.T) {
 	wantPackageScope := []string{
-		// The 23 value-type aliases.
+		// The 24 value-type aliases.
 		"Access", "Attribution", "Bound", "Catalogue", "Change", "Condition",
 		"Endpoint", "Field", "Index", "Key", "Operation", "Parameter",
 		"Partition", "Result", "Rollup", "Spec", "Step", "Term", "Connection",
-		"Following", "Refused", "Welcome", "Options",
+		"Following", "Refused", "Welcome", "Options", "Grant",
 		// The two package functions.
 		"Parse", "Dial",
 		// The two types declared (not aliased) by this package.

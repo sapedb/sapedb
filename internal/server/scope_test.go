@@ -1,8 +1,12 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sapedb/sapedb/internal/protocol"
 	"github.com/sapedb/sapedb/internal/store"
@@ -17,14 +21,36 @@ func (c *client) invokeHolding(name string, arguments map[string]any, held *gran
 	return c.read()
 }
 
-// granting mints a grant the way whoever issues connection strings would.
+// grantLife is how long the grants in these tests are minted for. Long enough
+// that nothing here can expire while the suite runs on a slow machine, short
+// enough to be a real expiry rather than a way of writing "never" — which is
+// the thing ISS-11 abolished and which no test in this file may quietly
+// reintroduce.
+const grantLife = time.Hour
+
+// grantSerial hands every grant in these tests a serial of its own. A serial
+// is mandatory and is inside the signature, so one shared constant would make
+// every grant here differ only in its scopes and hide a whole field from every
+// assertion below.
+var grantSerial atomic.Int64
+
+// granting mints a grant the way whoever issues connection strings would:
+// offline, with the secret, for a stated span of time.
 func granting(t *testing.T, server *Server, account, name string, scopes []string) *grant {
 	t.Helper()
-	signature, err := server.Grant(account, name, scopes)
+	return grantingUntil(t, server, account, name, scopes, time.Now().Add(grantLife))
+}
+
+// grantingUntil is granting with the expiry said out loud, for the tests that
+// are about the expiry.
+func grantingUntil(t *testing.T, server *Server, account, name string, scopes []string, expires time.Time) *grant {
+	t.Helper()
+	serial := fmt.Sprintf("test-%04d", grantSerial.Add(1))
+	signature, err := server.Grant(account, name, scopes, expires, serial)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &grant{Scopes: scopes, Signature: signature}
+	return &grant{Scopes: scopes, Expires: expires.Unix(), Serial: serial, Signature: signature}
 }
 
 // rowsIn is the rows of a successful call, and a failure otherwise.
@@ -125,11 +151,14 @@ func TestAnOperationThatDeclaresAScopeRunsForWhoeverWasGrantedIt(t *testing.T) {
 	// minted over one spelling of the set and presented in another, and the
 	// signature still stands — because Granting sorts and de-duplicates before
 	// it signs.
-	signature, err := server.Grant("acme", "main", []string{"articles:write", "articles:read"})
-	if err != nil {
-		t.Fatal(err)
+	minted := grantingUntil(t, server, "acme", "main",
+		[]string{"articles:write", "articles:read"}, time.Now().Add(grantLife))
+	rewritten := &grant{
+		Scopes:    []string{"articles:read", "articles:write", "articles:read"},
+		Expires:   minted.Expires,
+		Serial:    minted.Serial,
+		Signature: minted.Signature,
 	}
-	rewritten := &grant{Scopes: []string{"articles:read", "articles:write", "articles:read"}, Signature: signature}
 	if len(rowsIn(t, client.invokeHolding("articles.secret", map[string]any{"author": "ann"}, rewritten))) == 0 {
 		t.Fatal("the same set of scopes written in another order was not the same grant")
 	}
@@ -362,5 +391,158 @@ func TestComposingIsNotAWayRoundAScopeOverTheWire(t *testing.T) {
 	}
 	if got := rows[0]["author"]; got != "ann" {
 		t.Fatalf("the composed operation returned %v, which is not the row the guarded leg reads", rows[0])
+	}
+}
+
+// TestAnExpiredGrantIsRefusedUnderItsOwnCode is ISS-11 measured where it
+// actually has to hold: over a socket, in the JSON a client parses.
+//
+// Two things are checked and the second is the one with history behind it.
+// The first is that an expired grant does not work — a grant was good forever
+// until this, and the only way to withdraw one was to rotate the server secret
+// and break every connection string on the machine along with it.
+//
+// The second is that it is refused under a code of its own. ISS-21 is exactly
+// the mistake this avoids: a condition a program has to branch on, arriving
+// with no name, so the only way to act on it is to match the prose — and the
+// prose is the one part of an error a server is free to improve. An expired
+// grant and a grant that does not authorise the scope are different
+// situations with different answers: refresh, and give up. So they are
+// different codes, and this test reads them off the wire rather than out of
+// codeFor's table. A table test that only reads the table agrees with itself.
+func TestAnExpiredGrantIsRefusedUnderItsOwnCode(t *testing.T) {
+	server, address := running(t, false)
+	declare(t, server, "acme", "main")
+	declare(t, server, "acme", "other")
+
+	client := dial(t, address)
+	client.open(server, "acme", "main")
+	stock(t, client)
+
+	// The control, first and on the same connection. Every refusal below is
+	// worth exactly as much as this line is.
+	live := granting(t, server, "acme", "main", []string{"articles:read"})
+	if len(rowsIn(t, client.invokeHolding("articles.secret", map[string]any{"author": "ann"}, live))) == 0 {
+		t.Fatal("the unexpired grant did not work, so none of the refusals below measures anything")
+	}
+
+	refusals := []struct {
+		name string
+		held *grant
+		code string
+	}{
+		{
+			// An hour past. The signature is perfect and the grant is dead,
+			// which is the whole of what this ticket added.
+			"an hour out of date",
+			grantingUntil(t, server, "acme", "main", []string{"articles:read"}, time.Now().Add(-time.Hour)),
+			"grant_expired",
+		},
+		{
+			// One second past, which is where an off-by-one would hide.
+			"a second out of date",
+			grantingUntil(t, server, "acme", "main", []string{"articles:read"}, time.Now().Add(-time.Second)),
+			"grant_expired",
+		},
+		{
+			// Minted for the moment it was minted. Expires is the first
+			// instant the grant is no longer one, not the last that it is,
+			// and there is no skew allowance to lend it another second: the
+			// margin belongs in the number the issuer signs, where an
+			// operator can see it, not in a constant inside the verifier
+			// where nobody can.
+			"expiring at the instant it was minted",
+			grantingUntil(t, server, "acme", "main", []string{"articles:read"}, time.Now()),
+			"grant_expired",
+		},
+		{
+			// And the other half of the distinction. A grant for another
+			// database is not expired, it is not yours, and a caller that
+			// reacted to it by going and fetching a fresh grant would fetch
+			// the same wrong one forever.
+			"issued for another database, and not expired",
+			grantingUntil(t, server, "acme", "other", []string{"articles:read"}, time.Now().Add(grantLife)),
+			"grant",
+		},
+	}
+	for _, one := range refusals {
+		t.Run(one.name, func(t *testing.T) {
+			frame := client.invokeHolding("articles.secret", map[string]any{"author": "ann"}, one.held)
+			if frame.Type == protocol.Result {
+				t.Fatalf("the call ran: %s", frame.Payload)
+			}
+			if want := `"code":"` + one.code + `"`; !strings.Contains(string(frame.Payload), want) {
+				t.Fatalf("the refusal reads %s, want %s", frame.Payload, want)
+			}
+		})
+	}
+
+	// A caller that edits the expiry, or the serial, on a real grant holds a
+	// signature that no longer covers what it is presenting. That is a forged
+	// grant and not an expired one, whichever way the number was moved —
+	// including the direction that would be useful, which is forwards.
+	expired := grantingUntil(t, server, "acme", "main", []string{"articles:read"}, time.Now().Add(-time.Hour))
+	for _, edit := range []struct {
+		name   string
+		change func(*grant)
+	}{
+		{"the expiry pushed into the future", func(g *grant) { g.Expires = time.Now().Add(grantLife).Unix() }},
+		{"the serial rewritten", func(g *grant) { g.Serial = "not-the-one-that-was-signed" }},
+	} {
+		t.Run(edit.name, func(t *testing.T) {
+			edited := *expired
+			edit.change(&edited)
+			frame := client.invokeHolding("articles.secret", map[string]any{"author": "ann"}, &edited)
+			if frame.Type == protocol.Result {
+				t.Fatalf("a caller rewrote a signed field of its own grant and the call ran: %s", frame.Payload)
+			}
+			if !strings.Contains(string(frame.Payload), `"code":"grant"`) {
+				t.Fatalf("the refusal reads %s, want the grant code — an edited grant is forged, not expired", frame.Payload)
+			}
+		})
+	}
+
+	// And the last shape a client can send: a grant object with no expiry in
+	// it at all, which is what a client written against the older wire would
+	// produce. There is no second message shape for it to be read as. It is
+	// a grant whose exp is zero, it does not verify, and it is refused —
+	// never accepted as "no expiry stated, so no expiry".
+	noExpiry := &grant{Scopes: []string{"articles:read"}, Signature: live.Signature}
+	frame := client.invokeHolding("articles.secret", map[string]any{"author": "ann"}, noExpiry)
+	if frame.Type == protocol.Result {
+		t.Fatalf("a grant with no expiry ran: %s", frame.Payload)
+	}
+	if !strings.Contains(string(frame.Payload), `"code":"grant"`) {
+		t.Fatalf("a grant sent with no expiry was refused as %s, want the grant code", frame.Payload)
+	}
+}
+
+// TestTheExpiredGrantCodeIsOnTheTable is the half of the previous test that
+// cannot be seen from the wire: that ErrGrantExpired reaches codeFor at all,
+// and that it does so without depending on where it sits in the table.
+//
+// It is written because the wire test above could pass with ErrGrantExpired
+// wrapping ErrGrant and the two rows in the right order — and then go wrong
+// the day somebody sorts the table. Here the error is handed to codeFor
+// directly and the ordering assumption is named rather than relied on.
+func TestTheExpiredGrantCodeIsOnTheTable(t *testing.T) {
+	expired := fmt.Errorf("%w: %q on %q", ErrGrantExpired, "acme", "main")
+	if got := codeFor(expired); got != "grant_expired" {
+		t.Errorf("codeFor(%v) = %q, want %q", expired, got, "grant_expired")
+	}
+	// The control: the older condition still has its own code, so the two
+	// can be told apart rather than one having eaten the other.
+	forged := fmt.Errorf("%w: %q on %q", ErrGrant, "acme", "main")
+	if got := codeFor(forged); got != "grant" {
+		t.Errorf("codeFor(%v) = %q, want %q", forged, got, "grant")
+	}
+	// Independent sentinels, not one wrapping the other. If either of these
+	// becomes true, codeFor's answer starts depending on the order of two
+	// rows in a table nobody thinks of as ordered.
+	if errors.Is(expired, ErrGrant) {
+		t.Error("an expired grant satisfies errors.Is(err, ErrGrant), so codeFor's answer now depends on which row comes first")
+	}
+	if errors.Is(forged, ErrGrantExpired) {
+		t.Error("a forged grant satisfies errors.Is(err, ErrGrantExpired), so codeFor's answer now depends on which row comes first")
 	}
 }

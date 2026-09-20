@@ -1,12 +1,16 @@
 package signing
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fixture struct {
@@ -315,19 +319,36 @@ func TestTheOperatorProofIsTheseExactBytes(t *testing.T) {
 	}
 }
 
+// grantAt is the fixed moment the grant tests in this file mint against, and
+// held is one grant good for an hour after it. Fixed rather than time.Now()
+// so that a failure reads the same on every machine and in every year, and so
+// that the expiry boundary below is an exact comparison rather than a race
+// against the test's own runtime.
+var grantAt = time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+
+func aGrant() Held {
+	return Held{
+		AccountID: "acme",
+		DBName:    "main",
+		Scopes:    []string{"articles:read", "billing:write"},
+		Expires:   grantAt.Add(time.Hour),
+		Serial:    "01K5ZQ9P7B3N4M6R8T0V2W4X6Y",
+	}
+}
+
 // TestAGrantIsTheOneSetOfScopesForTheOneDatabase is the domain separation a
-// grant lives or dies by.
+// grant is for, measured.
 //
-// A grant says three things at once — these scopes, this account, this
-// database — and all three are inside the message, so none of them can be
-// changed without the signature failing. The table is what a grant must NOT
-// verify against, and the first row of the test is what it must: a table of
-// nothing but false is also what a Grants that always returns false would
-// produce.
+// A grant says five things at once — these scopes, this account, this
+// database, until this moment, under this serial — and all five are inside the
+// message, so none of them can be changed without the signature failing. The
+// table is what a grant must NOT verify against, and the first row of the test
+// is what it must: a table of nothing but refusals is also what a Grants that
+// always refused would produce.
 func TestAGrantIsTheOneSetOfScopesForTheOneDatabase(t *testing.T) {
 	const secret = "the secret only the control plane has"
 
-	held := Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read", "billing:write"}}
+	held := aGrant()
 	signature, err := Granting(held, secret)
 	if err != nil {
 		t.Fatal(err)
@@ -336,35 +357,46 @@ func TestAGrantIsTheOneSetOfScopesForTheOneDatabase(t *testing.T) {
 		t.Fatalf("a grant is %d characters, want 64 of lower-case hex", len(signature))
 	}
 
-	// The known-positive. Everything below is a false that only means
-	// something because this is a true.
-	if !Grants(signature, held, secret) {
-		t.Fatal("a grant does not verify against what it was made from — nothing else in this test measures anything")
+	// The known-positive. Everything below is a refusal that only means
+	// something because this is an acceptance.
+	if err := Grants(signature, held, secret, grantAt); err != nil {
+		t.Fatalf("a grant does not verify against what it was made from (%v) — nothing else in this test measures anything", err)
 	}
 
 	// And the set is a set: written in another order, with a repeat, it is the
 	// same grant.
-	shuffled := Held{AccountID: "acme", DBName: "main",
-		Scopes: []string{"billing:write", "articles:read", "billing:write"}}
-	if !Grants(signature, shuffled, secret) {
-		t.Fatal("the same scopes written in another order were not the same grant")
+	shuffled := aGrant()
+	shuffled.Scopes = []string{"billing:write", "articles:read", "billing:write"}
+	if err := Grants(signature, shuffled, secret, grantAt); err != nil {
+		t.Fatalf("the same scopes written in another order were not the same grant: %v", err)
 	}
 
+	another := func(change func(*Held)) Held {
+		other := aGrant()
+		change(&other)
+		return other
+	}
 	elsewhere := []struct {
 		name string
 		held Held
 	}{
-		{"another database", Held{AccountID: "acme", DBName: "other", Scopes: held.Scopes}},
-		{"another account", Held{AccountID: "rival", DBName: "main", Scopes: held.Scopes}},
-		{"a scope added", Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read", "billing:write", "admin"}}},
-		{"a scope removed", Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read"}}},
-		{"no scopes at all", Held{AccountID: "acme", DBName: "main"}},
+		{"another database", another(func(h *Held) { h.DBName = "other" })},
+		{"another account", another(func(h *Held) { h.AccountID = "rival" })},
+		{"a scope added", another(func(h *Held) { h.Scopes = append(h.Scopes, "admin") })},
+		{"a scope removed", another(func(h *Held) { h.Scopes = []string{"articles:read"} })},
+		{"no scopes at all", another(func(h *Held) { h.Scopes = nil })},
+		// The two fields ISS-11 added. A caller that wants longer, or wants
+		// to be a different grant on a revocation list, has to make a new
+		// signature — which it cannot.
+		{"a later expiry", another(func(h *Held) { h.Expires = grantAt.Add(48 * time.Hour) })},
+		{"one second later", another(func(h *Held) { h.Expires = h.Expires.Add(time.Second) })},
+		{"another serial", another(func(h *Held) { h.Serial = "01K5ZQ9P7B3N4M6R8T0V2W4X6Z" })},
 	}
 	refused := 0
 	for _, one := range elsewhere {
 		t.Run(one.name, func(t *testing.T) {
-			if Grants(signature, one.held, secret) {
-				t.Fatalf("a grant made for %+v verified as %+v", held, one.held)
+			if err := Grants(signature, one.held, secret, grantAt); !errors.Is(err, ErrBadSignature) {
+				t.Fatalf("a grant made for %+v verified as %+v: %v", held, one.held, err)
 			}
 			refused++
 		})
@@ -374,8 +406,293 @@ func TestAGrantIsTheOneSetOfScopesForTheOneDatabase(t *testing.T) {
 	}
 
 	// Another secret is another server, whatever the grant says.
-	if Grants(signature, held, "a different secret entirely") {
-		t.Fatal("a grant verified under a secret it was not made with")
+	if err := Grants(signature, held, "a different secret entirely", grantAt); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("a grant verified under a secret it was not made with: %v", err)
+	}
+}
+
+// TestAnExpiredGrantIsRefusedAsExpiredAndNotAsForged is ISS-11's whole point,
+// and the second half of its name is the half that took work.
+//
+// A grant that has run out and a grant that was never yours are both refusals,
+// and a caller does different things about them: the first is a reason to go
+// and ask the issuer for another, the second is a reason to stop. So the two
+// arrive as different errors here and, through codeFor, as different codes on
+// the wire.
+//
+// The boundary is exact and is asserted at the second on either side, because
+// "expired" is a comparison and a comparison is where an off-by-one lives.
+func TestAnExpiredGrantIsRefusedAsExpiredAndNotAsForged(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	held := aGrant()
+	signature, err := Granting(held, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	moments := []struct {
+		name    string
+		now     time.Time
+		expired bool
+	}{
+		{"an hour before it runs out", held.Expires.Add(-time.Hour), false},
+		{"one second before it runs out", held.Expires.Add(-time.Second), false},
+		// Expires is the first instant at which the grant is no longer one,
+		// not the last at which it is — the same rule as every other exp
+		// field a client author has met.
+		{"the instant it runs out", held.Expires, true},
+		{"one second after it runs out", held.Expires.Add(time.Second), true},
+		{"a year after it runs out", held.Expires.Add(365 * 24 * time.Hour), true},
+	}
+	for _, moment := range moments {
+		t.Run(moment.name, func(t *testing.T) {
+			err := Grants(signature, held, secret, moment.now)
+			switch {
+			case moment.expired && !errors.Is(err, ErrExpired):
+				t.Fatalf("at %s a grant that ran out at %s was answered %v, want ErrExpired",
+					moment.now.Format(time.RFC3339), held.Expires.Format(time.RFC3339), err)
+			case !moment.expired && err != nil:
+				t.Fatalf("at %s a grant good until %s was refused: %v",
+					moment.now.Format(time.RFC3339), held.Expires.Format(time.RFC3339), err)
+			}
+		})
+	}
+
+	// And an expired grant that is ALSO forged is forged, not expired. The
+	// signature is checked first and always, so nothing a caller made up can
+	// be used to ask this function whether some tuple has expired.
+	if err := Grants(signature, another(held, func(h *Held) { h.DBName = "other" }), secret, held.Expires.Add(time.Hour)); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("an expired grant for the wrong database was reported as %v, want ErrBadSignature", err)
+	}
+
+	// The refusal names both clocks. An operator whose server is wrong has
+	// nothing else to read: the credential says one time, the machine says
+	// another, and the only place those two numbers meet is this sentence.
+	err = Grants(signature, held, secret, held.Expires.Add(90*time.Minute))
+	if err == nil {
+		t.Fatal("an expired grant was accepted")
+	}
+	for _, want := range []string{"2026-09-21T13:00:00Z", "2026-09-21T14:30:00Z"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal reads %q, which does not name %s", err, want)
+		}
+	}
+}
+
+// another is a copy of a grant with one thing changed, so a table row can say
+// what it changed rather than restating every field that it did not.
+func another(base Held, change func(*Held)) Held {
+	out := base
+	out.Scopes = append([]string(nil), base.Scopes...)
+	change(&out)
+	return out
+}
+
+// TestAGrantMustCarryAnExpiryAndASerial is the mandatory half of ISS-11's
+// first decision, enforced at the only place that can enforce it: a message
+// that cannot be built is a grant that cannot be signed.
+//
+// Not "verified when present". A verifier that accepts a message with no
+// expiry is the downgrade an attacker would pick — strip the field, and the
+// credential is good forever again. There is one message shape and one branch
+// that reads it, and the way to keep it that way is for the unexpiring grant
+// to be unrepresentable rather than merely discouraged.
+func TestAGrantMustCarryAnExpiryAndASerial(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	// The control: the complete grant mints.
+	if _, err := Granting(aGrant(), secret); err != nil {
+		t.Fatalf("a complete grant was refused: %v", err)
+	}
+
+	for _, one := range []struct {
+		name string
+		held Held
+		want error
+	}{
+		{"no expiry at all", another(aGrant(), func(h *Held) { h.Expires = time.Time{} }), ErrExpiry},
+		{"the epoch itself", another(aGrant(), func(h *Held) { h.Expires = time.Unix(0, 0) }), ErrExpiry},
+		{"before the epoch", another(aGrant(), func(h *Held) { h.Expires = time.Unix(-1, 0) }), ErrExpiry},
+		{"no serial at all", another(aGrant(), func(h *Held) { h.Serial = "" }), ErrSerial},
+		{"a serial of 65 bytes", another(aGrant(), func(h *Held) { h.Serial = strings.Repeat("s", SerialBytes+1) }), ErrSerial},
+		{"a serial holding a newline", another(aGrant(), func(h *Held) { h.Serial = "01K5\nZQ9P" }), ErrSerial},
+		{"a serial holding a NUL", another(aGrant(), func(h *Held) { h.Serial = "01K5\x00ZQ9P" }), ErrSerial},
+	} {
+		t.Run(one.name, func(t *testing.T) {
+			if _, err := Granting(one.held, secret); !errors.Is(err, one.want) {
+				t.Fatalf("minting gave %v, want %v", err, one.want)
+			}
+		})
+	}
+
+	// A serial of exactly the limit is not over it, and a serial holding the
+	// two characters the v1 message would have had to ban is accepted — the
+	// length prefix is what keeps the message unambiguous, not a character
+	// table, and a rule banning them would be this encoding quietly leaning
+	// on one again.
+	for _, serial := range []string{strings.Repeat("s", SerialBytes), "2026:001", "a,b", "a:b,c:d"} {
+		if _, err := Granting(another(aGrant(), func(h *Held) { h.Serial = serial }), secret); err != nil {
+			t.Errorf("a serial of %q was refused: %v", serial, err)
+		}
+	}
+
+	// Sub-second precision is not part of a grant: the message carries
+	// Unix seconds, so two times inside one second are one grant, and a
+	// caller that signs with nanoseconds and verifies without them must not
+	// be told its own grant is forged.
+	fine := another(aGrant(), func(h *Held) { h.Expires = grantAt.Add(time.Hour + 500*time.Millisecond) })
+	signature, err := Granting(fine, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Grants(signature, aGrant(), secret, grantAt); err != nil {
+		t.Fatalf("a grant signed with a fraction of a second did not verify against the whole second: %v", err)
+	}
+}
+
+// TestTwoGrantsCannotShareOneMessage is the collision test, and it is a
+// security test rather than a formatting one: two different (account, dbname,
+// scopes, exp, serial) tuples that write the same message are two different
+// grants with one signature, which is a forgery primitive.
+//
+// The first pair is the one that matters, and it is not hypothetical. Under
+// the obvious extension of the v1 format — account ":" dbname ":" scope_list
+// ":" exp ":" serial, which is what "add two more fields" looks like when
+// nobody stops to ask — these two tuples write the identical string
+// "acme:main:x:100:200:z":
+//
+//	(scopes ["x"],     exp 100, serial "200:z")
+//	(scopes ["x:100"], exp 200, serial "z")
+//
+// because a scope may hold a ":" and so may a serial, and the parser has no
+// way to know where one field stopped. One signature, two meanings, one of
+// them with an expiry a century away. The v2 message puts a byte count in
+// front of every field, so there is nothing left for a ":" to be mistaken
+// for.
+//
+// Run this against a GrantMessage that joins with colons instead and the
+// first row goes red. That is the point of the row.
+func TestTwoGrantsCannotShareOneMessage(t *testing.T) {
+	const secret = "the secret only the control plane has"
+
+	base := func(scopes []string, exp int64, serial string) Held {
+		return Held{AccountID: "acme", DBName: "main", Scopes: scopes,
+			Expires: time.Unix(exp, 0), Serial: serial}
+	}
+
+	pairs := []struct {
+		name string
+		one  Held
+		two  Held
+	}{
+		{
+			// The colon-joined collision, written out.
+			"a scope eating the expiry",
+			base([]string{"x"}, 100, "200:z"),
+			base([]string{"x:100"}, 200, "z"),
+		},
+		{
+			// The same trick one field to the left: a dbname is not allowed
+			// a ":" today, but the scope list is, and the scope list is what
+			// a naive format would let run into the expiry.
+			"a scope eating the expiry and the serial",
+			base([]string{"a:1:b"}, 2, "c"),
+			base([]string{"a"}, 1, "b:2:c"),
+		},
+		{
+			// Field boundaries between the first three, which is the shape
+			// the v1 format was already proved safe against. It stays safe,
+			// and the row is here so that a change which breaks it is caught
+			// by this test rather than by the older one that no longer
+			// exists in this form.
+			"the account and the database split two ways",
+			Held{AccountID: "ac", DBName: "me.main", Scopes: []string{"s"}, Expires: time.Unix(100, 0), Serial: "n"},
+			Held{AccountID: "ac.me", DBName: "main", Scopes: []string{"s"}, Expires: time.Unix(100, 0), Serial: "n"},
+		},
+		{
+			// An empty scope list next to a serial that could be read as one.
+			"nothing granted against something that looks granted",
+			base(nil, 100, "n"),
+			base([]string{"100"}, 100, "n"),
+		},
+		{
+			// A count is a string too: 1 byte of "1" against 11 bytes that
+			// start with one.
+			"a count that could be read as part of its field",
+			base([]string{"1"}, 100, "n"),
+			base([]string{"1:1234567"}, 100, "n"),
+		},
+	}
+
+	for _, pair := range pairs {
+		t.Run(pair.name, func(t *testing.T) {
+			one, err := GrantMessage(pair.one)
+			if err != nil {
+				t.Fatalf("building the first message: %v", err)
+			}
+			two, err := GrantMessage(pair.two)
+			if err != nil {
+				t.Fatalf("building the second message: %v", err)
+			}
+			// The premise. Two rows that are secretly the same tuple would
+			// make this test agree with itself and measure nothing.
+			if reflect.DeepEqual(pair.one, pair.two) {
+				t.Fatal("this row is one tuple written twice, so it cannot collide and does not measure anything")
+			}
+			if one == two {
+				t.Fatalf("two different grants sign the same bytes %q — a signature over one is a signature over the other", one)
+			}
+
+			// And the signatures, which is the thing that actually matters:
+			// a grant minted for one must not verify as the other.
+			signature, err := Granting(pair.one, secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := Grants(signature, pair.one, secret, time.Unix(1, 0)); err != nil {
+				t.Fatalf("the first grant does not verify as itself (%v) — the refusal below measures nothing", err)
+			}
+			if err := Grants(signature, pair.two, secret, time.Unix(1, 0)); !errors.Is(err, ErrBadSignature) {
+				t.Fatalf("a grant minted for %+v verified as %+v", pair.one, pair.two)
+			}
+		})
+	}
+}
+
+// TestTheGrantMessageIsTheseExactBytes pins the encoding, because every other
+// test in this file would stay green if the whole format changed on both
+// sides at once — and the TypeScript and PHP clients are not on both sides.
+// fixtures/signing.json is the contract; this is the same bytes spelled out
+// where a Go reader will see them.
+func TestTheGrantMessageIsTheseExactBytes(t *testing.T) {
+	message, err := GrantMessage(aGrant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "sapedb/scopes:v2\n" +
+		"4:acme\n" +
+		"4:main\n" +
+		"27:articles:read,billing:write\n" +
+		"10:1789995600\n" +
+		"26:01K5ZQ9P7B3N4M6R8T0V2W4X6Y\n"
+	if message != want {
+		t.Fatalf("the signed message is\n%q\nwant\n%q", message, want)
+	}
+	// The version line is the label the key is derived under, deliberately
+	// one string and not two: a message that names its own key cannot be
+	// replayed into a verifier expecting a different one, and there is one
+	// version spelling to change next time rather than two to get out of step.
+	if !strings.HasPrefix(message, GrantLabel+"\n") {
+		t.Fatalf("the message does not begin with GrantLabel %q", GrantLabel)
+	}
+	// A grant of nothing writes an empty third field, not a missing one.
+	empty, err := GrantMessage(another(aGrant(), func(h *Held) { h.Scopes = nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(empty, "\n0:\n") {
+		t.Fatalf("a grant of no scopes writes %q, which has no empty scope-list field in it", empty)
 	}
 }
 
@@ -386,18 +703,36 @@ func TestAGrantIsTheOneSetOfScopesForTheOneDatabase(t *testing.T) {
 // keeping one from being presented as the other would be the shape of the
 // message — and a message is a string somebody chooses. A label of its own
 // makes them different keys, so the question never gets as far as the message.
+//
+// Under v1 this test proved that by building two identical messages: a
+// connection string whose password was a database name, against a grant of
+// one scope. The v2 grant message cannot be made to equal a connection-string
+// message at all — it begins with a version line no connection string has —
+// so the premise is measured directly instead, on the keys themselves. That
+// is the stronger form of the same claim: the messages now differ AND the
+// keys differ, and this test would still fail if the second stopped being
+// true.
 func TestAGrantAndAConnectionStringAreNotInterchangeable(t *testing.T) {
 	const secret = "the secret only the control plane has"
 
-	// The two messages are deliberately built to be the same bytes: an account
-	// whose "password" is a database name, against a grant of one scope. Under
-	// one key this would be one signature.
+	// The keys, first and directly. Same secret, same bytes signed, two
+	// labels: if these ever agreed, nothing about either message would
+	// matter.
+	sameBytes := []byte("whatever either side happens to be signing")
+	connectionKey := hmac.New(sha256.New, key(secret, DefaultLabel))
+	connectionKey.Write(sameBytes)
+	grantKey := hmac.New(sha256.New, key(secret, GrantLabel))
+	grantKey.Write(sameBytes)
+	if hmac.Equal(connectionKey.Sum(nil), grantKey.Sum(nil)) {
+		t.Fatal("the connection-string key and the grant key are the same key — one signature is both credentials")
+	}
+
 	parts := Parts{AccountID: "acme", Password: "main0000000000000", DBName: "read"}
 	connection, err := Sign(parts, secret, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := Held{AccountID: "acme", DBName: "main0000000000000", Scopes: []string{"read"}}
+	held := aGrant()
 	grant, err := Granting(held, secret)
 	if err != nil {
 		t.Fatal(err)
@@ -407,28 +742,13 @@ func TestAGrantAndAConnectionStringAreNotInterchangeable(t *testing.T) {
 	if !Verify(connection, parts, secret, "") {
 		t.Fatal("the connection-string signature does not verify as one")
 	}
-	if !Grants(grant, held, secret) {
-		t.Fatal("the grant does not verify as one")
+	if err := Grants(grant, held, secret, grantAt); err != nil {
+		t.Fatalf("the grant does not verify as one: %v", err)
 	}
 
-	message, err := Message(parts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	grantMessage, err := GrantMessage(held)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message != grantMessage {
-		t.Fatalf("this test's premise is stale: it means to sign identical bytes two ways and the bytes are %q and %q", message, grantMessage)
-	}
-
-	// Identical bytes, different signatures, and neither passes as the other.
-	if connection == grant {
-		t.Fatal("a connection string's signature and a grant over the same bytes are the same signature — the two are interchangeable")
-	}
-	if Grants(connection, held, secret) {
-		t.Fatal("a connection string's signature verified as a grant")
+	// Neither passes as the other.
+	if err := Grants(connection, held, secret, grantAt); !errors.Is(err, ErrBadSignature) {
+		t.Fatalf("a connection string's signature verified as a grant: %v", err)
 	}
 	if Verify(grant, parts, secret, "") {
 		t.Fatal("a grant verified as a connection string's signature")
@@ -437,36 +757,162 @@ func TestAGrantAndAConnectionStringAreNotInterchangeable(t *testing.T) {
 
 // TestWhatAScopeMayBe: a scope may hold a ":" — every scope this product uses
 // does — and may not hold the comma the list is joined with, because that is
-// the one character that would make two different sets the same message.
+// the one character that would make two different sets the same list.
 func TestWhatAScopeMayBe(t *testing.T) {
 	const secret = "the secret only the control plane has"
 
-	if _, err := Granting(Held{AccountID: "acme", DBName: "main", Scopes: []string{"articles:read"}}, secret); err != nil {
+	if _, err := Granting(another(aGrant(), func(h *Held) { h.Scopes = []string{"articles:read"} }), secret); err != nil {
 		t.Fatalf("a scope with a colon in it was refused: %v", err)
 	}
 	for _, scope := range []string{"", "a,b"} {
-		if _, err := Granting(Held{AccountID: "acme", DBName: "main", Scopes: []string{scope}}, secret); !errors.Is(err, ErrScope) {
+		if _, err := Granting(another(aGrant(), func(h *Held) { h.Scopes = []string{scope} }), secret); !errors.Is(err, ErrScope) {
 			t.Errorf("a scope of %q was accepted, want ErrScope: %v", scope, err)
 		}
 	}
 
 	// The ambiguity the comma ban closes, written out: without it, one scope
-	// spelled "a,b" and two scopes "a" and "b" are the same message and so the
-	// same grant.
-	one, err := GrantMessage(Held{AccountID: "acme", DBName: "main", Scopes: []string{"a", "b"}})
+	// spelled "a,b" and two scopes "a" and "b" are the same list and so the
+	// same grant. The length prefix does not save this one — it counts the
+	// bytes of the joined list, and both spellings join to the same three.
+	one, err := GrantMessage(another(aGrant(), func(h *Held) { h.Scopes = []string{"a", "b"} }))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if one != "acme:main:a,b" {
-		t.Fatalf("the signed message is %q, want %q", one, "acme:main:a,b")
+	if !strings.Contains(one, "\n3:a,b\n") {
+		t.Fatalf("the signed message is %q, which does not carry the scope list as a counted %q", one, "a,b")
 	}
 
 	// And a grant with no scopes at all is legal, and is not the same as a
 	// grant of one empty-named scope, which is refused above.
-	if _, err := Granting(Held{AccountID: "acme", DBName: "main"}, secret); err != nil {
+	if _, err := Granting(another(aGrant(), func(h *Held) { h.Scopes = nil }), secret); err != nil {
 		t.Fatalf("a grant of nothing was refused: %v", err)
 	}
-	if _, err := Granting(Held{AccountID: "acme", DBName: "main"}, ""); !errors.Is(err, ErrEmptySecret) {
+	if _, err := Granting(aGrant(), ""); !errors.Is(err, ErrEmptySecret) {
 		t.Fatalf("a grant under an empty secret: want ErrEmptySecret, got %v", err)
+	}
+}
+
+// grantFixture is the grant half of fixtures/signing.json — the vectors the
+// TypeScript and PHP clients check themselves against.
+type grantFixture struct {
+	Label string `json:"label"`
+	Cases []struct {
+		Name      string   `json:"name"`
+		AccountID string   `json:"accountId"`
+		DBName    string   `json:"dbname"`
+		Scopes    []string `json:"scopes"`
+		Exp       int64    `json:"exp"`
+		Serial    string   `json:"serial"`
+		Message   string   `json:"message"`
+		Sig       string   `json:"sig"`
+	} `json:"cases"`
+}
+
+func loadGrants(t *testing.T) (string, grantFixture) {
+	t.Helper()
+	raw, err := os.ReadFile("../../fixtures/signing.json")
+	if err != nil {
+		t.Fatalf("the shared fixture must be readable: %v", err)
+	}
+	var whole struct {
+		Secret string       `json:"secret"`
+		Grant  grantFixture `json:"grant"`
+	}
+	if err := json.Unmarshal(raw, &whole); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	// Before SAPE-21 this file carried nothing but connection-string triples,
+	// and a client had no way to check its handling of a grant against
+	// anything. An empty section here would make every assertion below pass
+	// over no rows at all, which is the one way this test goes quiet without
+	// anybody editing it.
+	if len(whole.Grant.Cases) < 7 {
+		t.Fatalf("fixture: expected at least 7 grant cases, got %d", len(whole.Grant.Cases))
+	}
+	return whole.Secret, whole.Grant
+}
+
+// TestTheGrantFixtureAgreesWithTheClientSide is the grant twin of
+// TestFixtureAgreesWithTheAppSide, and it is the most valuable test in this
+// file for the same reason: the clients do not sign, so the only thing that
+// can catch this side and their side drifting apart is a file they both read.
+//
+// It checks the message bytes as well as the signature, deliberately. A client
+// that gets the signature wrong learns nothing from "it did not verify"; a
+// client that can compare its own encoder's output against `message` finds the
+// missing byte count or the unsorted scope list in one look. The fixture's
+// vectors were computed independently of this package, so agreement here is
+// two implementations meeting rather than this one agreeing with itself.
+func TestTheGrantFixtureAgreesWithTheClientSide(t *testing.T) {
+	secret, fixture := loadGrants(t)
+
+	// Read from the file rather than from GrantLabel, and then compared to
+	// it — the same gap TestFixtureAgreesWithTheAppSide closes for the
+	// connection-string label. Renaming one without the other would otherwise
+	// leave every row below green.
+	if fixture.Label != GrantLabel {
+		t.Fatalf("fixture grant label %q does not match GrantLabel %q — one of them was renamed without the other",
+			fixture.Label, GrantLabel)
+	}
+
+	hexOnly := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	seen := map[string]string{}
+	for _, one := range fixture.Cases {
+		t.Run(one.Name, func(t *testing.T) {
+			held := Held{
+				AccountID: one.AccountID,
+				DBName:    one.DBName,
+				Scopes:    one.Scopes,
+				Expires:   time.Unix(one.Exp, 0),
+				Serial:    one.Serial,
+			}
+			message, err := GrantMessage(held)
+			if err != nil {
+				t.Fatalf("building the message: %v", err)
+			}
+			if message != one.Message {
+				t.Errorf("the message is\n  %q\nand the fixture says\n  %q", message, one.Message)
+			}
+			if !hexOnly.MatchString(one.Sig) {
+				t.Errorf("the fixture signature %q is not 64 lower-case hex characters", one.Sig)
+			}
+			signature, err := Granting(held, secret)
+			if err != nil {
+				t.Fatalf("minting: %v", err)
+			}
+			if signature != one.Sig {
+				t.Errorf("this side signs\n  %s\nand the fixture says\n  %s", signature, one.Sig)
+			}
+			// And it verifies, at a moment before it runs out — which is the
+			// thing a client actually needs to be true.
+			if err := Grants(one.Sig, held, secret, time.Unix(one.Exp-1, 0)); err != nil {
+				t.Errorf("the fixture signature does not verify: %v", err)
+			}
+		})
+		seen[one.Name] = one.Sig
+	}
+
+	// Two rows the file exists to pin, named rather than counted. The first
+	// is canonicalisation: the same set written differently is one grant. The
+	// second is the collision pair, which is the whole argument for counting
+	// the bytes of a field instead of joining with a delimiter — a client
+	// that reimplements the v1 style will produce one signature for both.
+	pairs := []struct {
+		one, two string
+		same     bool
+	}{
+		{"plain", `the same set written in another order, with a repeat — must sign identically to "plain"`, true},
+		{"a scope eating the expiry — one half of the pair a colon-joined format would confuse",
+			"the other half, which must sign differently", false},
+	}
+	for _, pair := range pairs {
+		one, two := seen[pair.one], seen[pair.two]
+		if one == "" || two == "" {
+			t.Fatalf("the fixture no longer carries both of %q and %q, so this check measures nothing", pair.one, pair.two)
+		}
+		if (one == two) != pair.same {
+			t.Errorf("%q and %q sign %s and %s; want them %s",
+				pair.one, pair.two, one, two, map[bool]string{true: "identical", false: "different"}[pair.same])
+		}
 	}
 }

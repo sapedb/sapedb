@@ -61,6 +61,7 @@ type (
 	Refused     = wire.ErrRefused
 	Welcome     = wire.Welcome
 	Options     = wire.Options
+	Grant       = wire.Grant
 )
 
 // Parse takes a connection string apart, naming whichever field is at fault.
@@ -160,11 +161,18 @@ func (c *Client) Establish(spec Spec) (Spec, error) {
 // alone is no use with any other list, and neither can be made without the
 // secret.
 //
+// A grant also says when it stops being one. The expiry is inside the
+// signature, so it is not a field this client could adjust even if it wanted
+// to, and the server checks it against its own clock with no skew allowance:
+// a grant is refused from its expiry onwards, under the code grant_expired
+// rather than the grant code a wrong or edited grant gets, so a caller can
+// tell "go and get another" from "stop asking".
+//
 // A connection that never calls this presents nothing and holds nothing, which
 // is what every caller did before grants existed. Calling it again replaces
-// what was presented; calling it with an empty grant clears it.
-func (c *Client) Present(scopes []string, grant string) {
-	c.inner.Present(scopes, grant)
+// what was presented; calling it with a zero Grant clears it.
+func (c *Client) Present(grant Grant) {
+	c.inner.Present(grant)
 }
 
 // Invoke runs a declared operation, at whichever version is newest.

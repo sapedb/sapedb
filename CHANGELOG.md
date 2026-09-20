@@ -7,6 +7,138 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Breaking
 
+- **A grant now expires, and the signed message changed shape to say so
+  (ISS-11).** Every grant minted by any earlier build is refused by this one,
+  and there is no migration and no dual-format verifier. Nothing has been
+  tagged, so this costs nothing today and could not be done at all after a
+  tag: adding a field to a signed message is a break, and the three clients
+  that carry grants would then have had to choose between refusing 1.0.0's
+  grants and accepting a message with no expiry in it — which is exactly the
+  downgrade an attacker would pick.
+
+  A grant used to say three things: these scopes, this account, this database.
+  It now says five. The two new fields are **`exp`**, the moment the grant
+  stops being one, and **`serial`**, a name for this particular grant. Both
+  are mandatory, both are inside the signature, and neither is optional or
+  "checked when present" — there is one message shape and one branch that
+  reads it.
+
+  `serial` is carried and signed and **nothing consults it**. It is here now
+  because adding a field to a signed message after a tag is a break and
+  adding one before a tag is an edit; the revocation list it exists for can
+  wait, the field could not.
+
+  **The signed message is length-prefixed instead of delimiter-joined.** It
+  was `account_id ":" dbname ":" scope[,scope...]`. It is now:
+
+  ```
+  "sapedb/scopes:v2" "\n"
+  len(account_id) ":" account_id "\n"
+  len(dbname)     ":" dbname     "\n"
+  len(scope_list) ":" scope_list "\n"
+  len(exp)        ":" exp        "\n"
+  len(serial)     ":" serial     "\n"
+  ```
+
+  Every length is the field's length in **bytes**, decimal, no leading zeros.
+  `scope_list` is the scopes sorted, de-duplicated and joined with `,` — the
+  same canonical form as before. `exp` is whole Unix seconds UTC in decimal.
+  The first line is `signing.GrantLabel` itself, which is also the key
+  derivation label: one version string rather than two that can drift apart.
+
+  Why count the bytes rather than add two more colons. The old message was
+  unambiguous, but only by an argument about three particular fields —
+  `account_id` and `dbname` may not contain `:`, so the first two colons are
+  fixed and the scope list is the whole of the tail. That argument is not a
+  property of the format and has to be remade every time a field is added.
+  Made again for five fields it fails: a scope may contain `:` and so may a
+  serial, so `account ":" dbname ":" scopes ":" exp ":" serial` writes the
+  identical string `acme:main:x:100:200:z` for both of
+
+  - scopes `["x"]`, exp `100`, serial `"200:z"`, and
+  - scopes `["x:100"]`, exp `200`, serial `"z"`
+
+  which is one signature over two different grants — a forgery primitive, not
+  a formatting nit. A count in front of every field leaves nothing for a
+  delimiter to be mistaken for, and a sixth field can be added without
+  reopening the question. Measured both ways: over 92,928 tuples built from an
+  alphabet of straddling strings the new encoding produces no collision, and
+  the same search over the colon-joined form produces sixteen. The same search
+  over the *old* three-field form produces none, so the format being replaced
+  was not itself ambiguous — it simply had no room to grow.
+
+  **On the wire** the `grant` object on the `invoke` payload gains two fields:
+
+  ```json
+  {"grant": {"scopes": ["articles:read"], "exp": 1789995600,
+             "serial": "01K5ZQ9P7B3N4M6R8T0V2W4X6Y", "sig": "…"}}
+  ```
+
+  `exp` is a JSON integer and `serial` a string; both are required whenever
+  `grant` is present, and neither is `omitempty`. A client that omits them
+  sends a zero expiry and an empty serial, which does not verify and is
+  refused — there is no older shape for it to be read as. Clients **carry**
+  these fields and do not produce them: the signature is made by whoever holds
+  the server secret, offline, which is unchanged.
+
+  **An expired grant is refused under its own code, `grant_expired`**, and not
+  under `grant`. The two are different conditions with different answers — go
+  and get another, against stop asking — and a program told to tell them apart
+  by reading the prose is the ISS-21 mistake. `server.ErrGrantExpired` is a
+  sentinel of its own and deliberately does not wrap `server.ErrGrant`, so
+  `codeFor`'s answer does not depend on the order of two rows in its table.
+
+  **No clock skew allowance.** Verification compares `exp` against the
+  verifier's own clock and gives nothing away on either side: a grant is
+  refused from `exp` onwards, not after it. Any leeway of *L* seconds is a
+  grant that keeps working for *L* seconds after the credential says it
+  stopped — invisible in the grant, invisible in the log, and the same for
+  every grant on the server. The margin belongs in the number the issuer
+  signs, where it is visible and per-grant, and the issuer is the party that
+  can size it because it picks the lifetime. Skew is real and is not fatal
+  here the way it is for a thirty-second token: a grant is issued offline for
+  hours or days, so an issuing clock a minute out shifts the effective expiry
+  by a minute. For an issuer to mint something already dead its clock would
+  have to be wrong by more than the whole lifetime of the grant, which is a
+  broken clock and not skew, and a leeway sized for skew would not save it.
+
+  What an operator with a badly wrong clock sees, said plainly: a server whose
+  clock is hours **fast** refuses every grant as expired, including ones
+  minted seconds earlier, and the refusal names both the grant's expiry and
+  the server's own reading of the clock, so the disagreement is in the message
+  rather than left to be guessed at. A server whose clock is hours **slow**
+  honours grants past their expiry and says nothing, and cannot do otherwise:
+  a verifier that does not know it is slow has nothing to compare itself
+  against.
+
+  Signature changes: `signing.Grants` returns an `error` rather than a `bool`,
+  because there are now two ways to refuse and a caller has to tell them
+  apart, and takes a `time.Time` rather than reading the clock itself, so that
+  no caller can verify a grant without having decided what time it is.
+  `signing.Held` gains `Expires` and `Serial`. `server.Server.Grant` takes an
+  expiry and a serial and defaults neither — an expiry it chose for itself
+  would be a policy hidden inside a signature, and a serial it generated would
+  be one the issuer could never name in a revocation list.
+  `Client.Present(scopes []string, grant string)` becomes
+  `Client.Present(grant Grant)`, and `Grant` is the fortieth name on this
+  module's public surface: two of the four values are strings, so a
+  four-argument form compiles just as happily with the last two the wrong way
+  round and would produce a grant that silently never verifies.
+
+  `fixtures/signing.json` — the file the TypeScript and PHP clients check
+  themselves against — carried only connection-string triples. It now carries
+  a `grant` section as well: the label, the message recipe, and seven vectors
+  giving the fields, the **exact message bytes** and the signature, including
+  the collision pair above (which must sign differently) and one set written
+  twice in different orders (which must sign identically).
+
+  **This does not build revocation.** There is no revocation list, nothing
+  reads the serial, and taking back a live grant before its expiry still
+  means rotating the server secret and invalidating every connection string on
+  that server with it. What changed is that a grant is no longer good forever,
+  so the window that has to be lived with is the one the issuer chose rather
+  than the life of the secret.
+
 - **The old product name is gone from the on-disk format and from every
   encryption key.** Two things that used to spell the product's former name
   now spell `sapedb`, and both of them decide whether an existing file can be
@@ -508,8 +640,10 @@ recorded, so its absence is not a claim that nothing changed before it.
     minted for one account cannot be presented by another, even on the same
     server under the same secret.
 
-  On the wire it is an optional `grant` object on the `invoke` payload:
-  `{"scopes": [...], "sig": "..."}`. Sending none is sending no scopes, so
+  On the wire it is an optional `grant` object on the `invoke` payload; it
+  carried `{"scopes": [...], "sig": "..."}` when this entry was written and
+  carries two more fields now (see *A grant now expires*). Sending none is
+  sending no scopes, so
   **every existing client keeps working unchanged** and keeps exactly the
   permissions it had. A grant that does not verify refuses the call outright,
   with the code `grant` rather than `not_allowed`: a bad credential is a
@@ -522,7 +656,8 @@ recorded, so its absence is not a claim that nothing changed before it.
   next to `Sign` — issuing a grant is the secret holder's job, the same as
   issuing a connection string, and nothing on the wire reaches it); and
   `Client.Present` on this module's public client, which takes the surface
-  from 32 names to 33.
+  from 32 names to 33. (`Client.Present` has since changed signature and the
+  surface has since grown again — see *A grant now expires*.)
 
   Deliberately **not** a challenge-response like the operator proof. A nonce
   would stop a grant being replayed and would also require whoever issues
@@ -532,13 +667,17 @@ recorded, so its absence is not a claim that nothing changed before it.
   that string can already reach the database, and the grant says what they may
   do once there.
 
-  Known limits, written here rather than left to be discovered: a grant has
-  **no expiry and no serial number**, so it is good until the secret changes,
-  and withdrawing one scope from one account today means reissuing every
-  connection string on that server. Adding an expiry changes the signed
-  message, which is a change this side and the TypeScript signer make together
-  — so it is not being done halfway now. A scope may contain `:` (every scope
-  this product uses does) and may not contain `,`.
+  Known limits, written here rather than left to be discovered: a scope may
+  contain `:` (every scope this product uses does) and may not contain `,`.
+
+  This entry once ended by saying that a grant had **no expiry and no serial
+  number**, so it was good until the secret changed. That is no longer true
+  and the sentence has been corrected rather than left standing with a
+  contradiction added below it — see *A grant now expires* under Breaking.
+  What is still true is the second half of it: **there is no revocation.**
+  Nothing keeps a list of withdrawn grants and nothing consults the serial, so
+  taking a live grant back before its expiry still means rotating the server
+  secret, which invalidates every connection string on that server too.
 
   With this, the scope-union rule composed operations landed with is measured
   end to end for the first time. In-process it was already true that a parent

@@ -216,11 +216,13 @@ func TestPresentingAGrantReachesAnOperationThatDeclaresAScope(t *testing.T) {
 
 	// The positive, on the same connection, after presenting a grant minted by
 	// whoever holds the secret.
-	grant, err := srv.Grant("acme", "main", []string{"notes:read"})
-	if err != nil {
+	expires := time.Now().Add(time.Hour)
+	signature, grantErr := srv.Grant("acme", "main", []string{"notes:read"}, expires, "wire-0001")
+	if err := grantErr; err != nil {
 		t.Fatal(err)
 	}
-	client.Present([]string{"notes:read"}, grant)
+	held := Grant{Scopes: []string{"notes:read"}, Expires: expires, Serial: "wire-0001", Signature: signature}
+	client.Present(held)
 
 	result, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"})
 	if err != nil {
@@ -233,7 +235,9 @@ func TestPresentingAGrantReachesAnOperationThatDeclaresAScope(t *testing.T) {
 	// A list this client edits after the fact is a list the signature no
 	// longer covers, and the server says so with the grant code rather than
 	// letting the call go on to fail for some other true-but-wrong reason.
-	client.Present([]string{"notes:read", "notes:write"}, grant)
+	edited := held
+	edited.Scopes = []string{"notes:read", "notes:write"}
+	client.Present(edited)
 	if _, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"}); err == nil {
 		t.Fatal("a client added a scope to a real grant and the call ran")
 	} else if !errors.As(err, &refused) || refused.Code != "grant" {
@@ -242,7 +246,7 @@ func TestPresentingAGrantReachesAnOperationThatDeclaresAScope(t *testing.T) {
 
 	// Clearing it puts the connection back where it started, which is what
 	// says Present is state on this client and not a one-way door.
-	client.Present(nil, "")
+	client.Present(Grant{})
 	if _, err := client.Invoke("notes.guarded", map[string]any{"author": "ann"}); err == nil {
 		t.Fatal("clearing the grant left the scope in place")
 	} else if !errors.As(err, &refused) || refused.Code != "not_allowed" {

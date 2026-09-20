@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultLabel derives the signing key from the secret. Both sides must agree
@@ -207,46 +209,75 @@ func Operates(proof string, secret string, nonce []byte) bool {
 // moment, by the same means, offline.
 //
 // The grant names the account and the database as well as the scopes, and all
-// three are signed together. So a grant is not a scope, it is a scope HERE: a
-// grant minted for one database cannot be presented at another, and one minted
-// for one account cannot be presented by another, even against the same server
-// under the same secret.
+// of it is signed together. So a grant is not a scope, it is a scope HERE and
+// UNTIL: a grant minted for one database cannot be presented at another, one
+// minted for one account cannot be presented by another, and one whose expiry
+// has passed cannot be presented at all.
 //
-// What it deliberately is not is a challenge-response like Operating below. A
+// What it deliberately is not is a challenge-response like Operating above. A
 // nonce would stop a grant being replayed, and it would also mean whoever
 // issues grants has to be online at the moment of every connection — which is
 // the opposite of how this product's credentials work, and would turn an
-// offline control plane into a request path. A grant is a bearer credential of
-// exactly the same weight as the connection string it travels beside: anybody
-// holding that string can already reach the database, and the grant says what
-// they may do once there. It is no stronger than the string and no weaker,
-// which is the honest place for it to sit.
+// offline control plane into a request path. An expiry does not: it is a
+// number the issuer writes into the message it is already signing, offline,
+// and the verifier reads it off the credential rather than asking anybody.
+// A grant is a bearer credential of exactly the same weight as the connection
+// string it travels beside — no stronger and no weaker — for as long as it
+// says it is good for.
 //
-// What it does not have yet, said out loud rather than discovered: an expiry,
-// and any way to withdraw one short of changing the secret. See the note on
-// Held.
-const GrantLabel = "sapedb/scopes:v1"
+// GrantLabel is both the key derivation label and the first line of the signed
+// message, deliberately one string rather than two: a message that names the
+// key it must be signed with cannot be replayed into a verifier expecting a
+// different one, and there is only one version spelling to get wrong when this
+// changes again. It was "sapedb/scopes:v1" over a three-field message with no
+// expiry and no serial; every grant minted under that is refused here, which
+// costs nothing because nothing has been tagged.
+const GrantLabel = "sapedb/scopes:v2"
 
-// ErrScope is a scope this protocol cannot carry: empty, or holding the comma
-// the list is joined with.
-//
-// A scope MAY hold a ":", and the ones this product uses do — "articles:read",
-// "catalog:read". That is safe even though ":" separates the first two fields
-// of the signed message, because those two fields cannot contain one: whatever
-// follows the second ":" is the scope list entire, so there is exactly one way
-// to read a message back into an account, a database and a list. The comma is
-// the one character that would be ambiguous, and it is the one that is banned.
-var ErrScope = errors.New(`sapedb: a scope must not be empty or contain ","`)
+var (
+	// ErrScope is a scope this protocol cannot carry: empty, or holding the
+	// comma the list is joined with.
+	//
+	// A scope MAY hold a ":", and the ones this product uses do —
+	// "articles:read", "catalog:read". The comma is the one character that
+	// would make two different sets the same list: one scope spelled "a,b"
+	// and two scopes "a" and "b" would join to the same string. Nothing else
+	// about a scope is constrained, because the field the list lands in is
+	// length-prefixed and so cannot run into its neighbours whatever it
+	// holds.
+	ErrScope = errors.New(`sapedb: a scope must not be empty or contain ","`)
 
-// Held is what a grant says: these scopes, for this account, on this database.
-//
-// There is no expiry field and no serial number, which means a grant is good
-// until the secret changes. That is a real limitation and it is written here
-// rather than left to be found: withdrawing one scope from one account today
-// means reissuing every connection string on the server. Adding an expiry is
-// a change to the signed message, so it is a change both this side and the
-// TypeScript signer make together — which is why it is not being done halfway
-// now.
+	// ErrExpiry is a grant with no usable expiry. There is no such thing as a
+	// grant without one: the zero time, a time before the epoch, and anything
+	// else that does not land on a positive count of seconds are all refused
+	// at minting rather than signed and discovered later.
+	ErrExpiry = errors.New("sapedb: a grant must carry an expiry, as a time after 1970")
+
+	// ErrSerial is a grant serial this protocol cannot carry: empty, longer
+	// than SerialBytes, or holding a control character.
+	//
+	// Note what is NOT banned: ":" and "," are both allowed, and that is the
+	// point rather than an oversight. The v2 message is length-prefixed, so
+	// no character in any field can be mistaken for a delimiter, and a rule
+	// banning one would be this encoding leaning on a character table again —
+	// which is the exact thing that had to be re-proved every time a field
+	// was added to the v1 message. Control characters are refused only so a
+	// serial can be printed into an error or a log without mangling it.
+	ErrSerial = errors.New("sapedb: a grant serial must be 1-64 bytes and hold no control characters")
+
+	// ErrExpired is a grant whose expiry has passed, checked against the
+	// clock the verifier was handed. It is a different answer from
+	// ErrBadSignature and must stay one: a caller whose grant expired should
+	// go and get another, and a caller whose grant never authorised this
+	// should stop.
+	ErrExpired = errors.New("sapedb: that grant has expired")
+)
+
+// SerialBytes is the longest a grant serial may be.
+const SerialBytes = 64
+
+// Held is what a grant says: these scopes, for this account, on this database,
+// until this moment, under this serial.
 type Held struct {
 	// AccountID and DBName are the same two fields a connection string signs,
 	// and they are here for the same reason: a credential that does not say
@@ -257,6 +288,25 @@ type Held struct {
 	// sorts and de-duplicates before signing, so the same set is always the
 	// same signature however a caller happens to have written it down.
 	Scopes []string
+	// Expires is when this grant stops being one, and it is mandatory. It is
+	// signed to whole seconds — GrantMessage writes Expires.Unix() and
+	// nothing finer — so two times in the same second are one grant.
+	//
+	// Mandatory rather than "checked when present" on purpose. A verifier
+	// that accepts a message with no expiry is a verifier an attacker can
+	// choose: strip the field, and the credential is good forever again.
+	// There is one message shape here and one branch that reads it.
+	Expires time.Time
+	// Serial names this particular grant, so that a revocation list has
+	// something to name. Nothing in this repository keeps such a list yet and
+	// this field is not consulted by verification — it is in the signed
+	// message now because adding a field to a signed message after a tag is a
+	// break, and adding one before the tag is an edit.
+	//
+	// Uniqueness is the issuer's business: two grants may carry the same
+	// serial and nothing here will notice, which matters the day somebody
+	// tries to revoke one of them and withdraws both.
+	Serial string
 }
 
 // scopeList is the canonical form of a set of scopes: sorted, de-duplicated,
@@ -284,20 +334,67 @@ func scopeList(scopes []string) (string, error) {
 	return strings.Join(unique, ","), nil
 }
 
+// validSerial reports whether a serial is one this protocol can carry.
+func validSerial(serial string) bool {
+	if serial == "" || len(serial) > SerialBytes {
+		return false
+	}
+	for _, r := range serial {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// counted writes one field of the signed message: its length in bytes, a ":",
+// the field, and a newline.
+//
+// The length is what makes the message unambiguous, and it is the only thing
+// that does. The ":" and the "\n" are there to be read by a person looking at
+// a fixture; a parser driven by the count never consults either, so a field
+// holding a ":" or a "\n" of its own changes nothing.
+func counted(value string) string {
+	return strconv.Itoa(len(value)) + ":" + value + "\n"
+}
+
 // GrantMessage is the exact bytes a grant signs:
 //
-//	account_id ":" dbname ":" scope["," scope...]
+//	"sapedb/scopes:v2" "\n"
+//	len(account_id) ":" account_id "\n"
+//	len(dbname)     ":" dbname     "\n"
+//	len(scope_list) ":" scope_list "\n"
+//	len(exp)        ":" exp        "\n"
+//	len(serial)     ":" serial     "\n"
 //
-// Unambiguous without length prefixing: account_id and dbname cannot contain a
-// ":", so the first two are fixed by the first two colons and everything after
-// the second one is the scope list entire — which is why a scope is allowed to
-// hold a ":" of its own, as every scope this product uses does. The comma is
-// the only character a scope may not hold.
+// where every length is the field's length in BYTES, written in decimal with
+// no leading zeros and no sign; scope_list is the scopes sorted,
+// de-duplicated and joined with ","; and exp is Expires.Unix() in decimal.
 //
-// A grant of no scopes is legal and means exactly what it says — the third
-// field is empty. It is worth minting: it is how a caller is told, in one
-// place, that it holds nothing, rather than by every scoped operation refusing
-// it one at a time.
+// Length-prefixed rather than delimiter-joined, and that is the whole of this
+// ticket's second decision. The v1 message was account_id ":" dbname ":"
+// scope_list, and it was unambiguous — but only by an argument: account_id and
+// dbname may not hold a ":", so the first two colons are fixed and the scope
+// list is the whole of the tail. That argument is not a property of the
+// format, it is a proof about three specific fields, and it has to be redone
+// from scratch every time a field is added. Adding two at once is exactly
+// where such a proof goes wrong: "a:b:" + scopes + ":" + exp + ":" + serial
+// is genuinely ambiguous the moment a serial may hold a ":" — the tuples
+// (scopes ["x"], exp 100, serial "200:z") and (scopes ["x:100"], exp 200,
+// serial "z") both write "a:b:x:100:200:z", which is two different grants with
+// one signature and therefore a forgery primitive rather than a formatting
+// nit. TestTwoGrantsCannotShareOneMessage holds exactly that pair.
+//
+// With a count in front of every field there is nothing left to prove: the
+// count says where the field ends, so no character in any field can be read as
+// a delimiter, and a sixth field could be added tomorrow without re-opening
+// the question. The version line pins which set of fields is being read, so a
+// message of five fields can never be mistaken for a message of six.
+//
+// A grant of no scopes is legal and means exactly what it says — the scope
+// list is the empty string, written "0:". It is worth minting: it is how a
+// caller is told, in one place, that it holds nothing, rather than by every
+// scoped operation refusing it one at a time.
 func GrantMessage(held Held) (string, error) {
 	if err := field(held.AccountID); err != nil {
 		return "", fmt.Errorf("account_id: %w", err)
@@ -309,7 +406,18 @@ func GrantMessage(held Held) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return held.AccountID + ":" + held.DBName + ":" + list, nil
+	if held.Expires.IsZero() || held.Expires.Unix() <= 0 {
+		return "", fmt.Errorf("%w: %v", ErrExpiry, held.Expires)
+	}
+	if !validSerial(held.Serial) {
+		return "", fmt.Errorf("%w: %q", ErrSerial, held.Serial)
+	}
+	return GrantLabel + "\n" +
+		counted(held.AccountID) +
+		counted(held.DBName) +
+		counted(list) +
+		counted(strconv.FormatInt(held.Expires.Unix(), 10)) +
+		counted(held.Serial), nil
 }
 
 // Granting mints a grant: lower-case hex, 64 characters. For whoever holds the
@@ -334,14 +442,66 @@ func Granting(held Held, secret string) (string, error) {
 }
 
 // Grants reports whether this signature is the one these scopes have, for this
-// account and this database, under this secret.
+// account and this database, under this secret — and whether the grant is
+// still good at the moment named by now.
 //
-// Constant time, and anything malformed is false rather than an error path of
-// its own — a forged grant is input, not an exception.
-func Grants(signature string, held Held, secret string) bool {
+// It returns an error rather than a bool, and takes a clock rather than
+// reading one, because both of those are the shape of the decision. There are
+// two ways to refuse and a caller has to tell them apart: a grant that expired
+// is a reason to go and get another, and a grant that was never for this
+// account is a reason to stop. A bool cannot say which, and a verifier that
+// reads time.Now() for itself is one a test cannot put a clock in front of.
+// Handing the clock in also means no caller can verify a grant without having
+// decided what time it is, which is the whole point of the field.
+//
+// The signature is checked first and always. Anything malformed — a grant
+// whose fields cannot even make a message — is ErrBadSignature and not an
+// error path of its own, so a forged grant stays input rather than becoming an
+// exception; and a forger learns nothing about a made-up grant's expiry,
+// because expiry is not consulted until the signature has already agreed.
+//
+// Comparison is constant time. As with Operates, no test here measures that:
+// a mutant replacing hmac.Equal with == passes everything in this package,
+// because the difference is a timing signal and not an answer.
+//
+// There is no clock skew allowance, and that is a decision rather than an
+// omission. Any leeway of L seconds is a grant that keeps working for L
+// seconds after the credential itself says it stopped — the exact property
+// this function exists to enforce, weakened by an amount that is invisible in
+// the grant, invisible in the log, and identical for every grant on the
+// server. The margin belongs in the number the issuer signs, where it is
+// visible and per-grant, and the issuer is the one party that can size it: it
+// picks the lifetime. Skew is real but it is not fatal here the way it is for
+// a thirty-second token — a grant is issued offline for hours or days, so an
+// issuing clock a minute out shifts the effective expiry by a minute and
+// nothing notices. For the issuing clock to mint something already dead it
+// would have to be wrong by more than the entire lifetime of the grant, which
+// is a broken clock and not skew, and a leeway sized for skew would not save
+// it anyway.
+//
+// What an operator with a badly wrong clock sees is therefore the honest
+// thing: a server whose clock is hours fast refuses every grant as expired,
+// including ones minted seconds earlier, and a server whose clock is hours
+// slow honours grants well past their expiry without saying so. Neither is
+// silent on the first count — the refusal names both the expiry and this
+// verifier's own reading of the clock, so the disagreement is in the error
+// message rather than left to be guessed at. The second is silent, and cannot
+// be otherwise: a verifier that does not know it is slow has nothing to
+// compare itself against.
+func Grants(signature string, held Held, secret string, now time.Time) error {
 	want, err := Granting(held, secret)
-	if err != nil {
-		return false
+	if err != nil || !hmac.Equal([]byte(strings.ToLower(signature)), []byte(want)) {
+		return ErrBadSignature
 	}
-	return hmac.Equal([]byte(strings.ToLower(signature)), []byte(want))
+	// Expires is the first instant at which the grant is no longer one, not
+	// the last at which it is: a grant marked for 12:00:00 is refused at
+	// 12:00:00. Same rule as every other exp field a client author has met,
+	// which is worth more here than a second of extra life.
+	if !now.Before(held.Expires.Truncate(time.Second)) {
+		return fmt.Errorf("%w: it was good until %s, and this verifier's clock reads %s",
+			ErrExpired,
+			held.Expires.UTC().Truncate(time.Second).Format(time.RFC3339),
+			now.UTC().Truncate(time.Second).Format(time.RFC3339))
+	}
+	return nil
 }

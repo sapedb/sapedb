@@ -56,5 +56,103 @@
       "derived": "81af18e602219869506fdfb8160253bd4339874706a34883178ff5c79b39e398",
       "direct": "c986915424f5bd3de0a47ee93246ce56bf2dcbe6c3c3427e05cb55ee4b8e72d0"
     }
-  ]
+  ],
+  "grant": {
+    "note": "Scope grants, ISS-11. Read by the store tests (Go) and by the client tests (TypeScript, PHP). Clients CARRY these fields and never sign them: the signature is made by whoever holds the secret, so a client's job is to reproduce `message` from the fields and check that the `sig` it was handed is the one it was given, or simply to pass all of exp, serial, scopes and sig through to the server unchanged.",
+    "label": "sapedb/scopes:v2",
+    "key": "key = HMAC-SHA256(secret, label) — the same derivation the connection string uses, under a label of its own so a connection-string signature can never be presented as a grant",
+    "sig": "sig = hex(HMAC-SHA256(key, message)), lower case, 64 characters",
+    "message": "the label, a newline, then each field written as <byte length in decimal, no leading zeros> \":\" <field> \"\\n\", in this order: account_id, dbname, scope_list, exp, serial",
+    "scopeList": "the scopes sorted (by byte value), de-duplicated, joined with \",\". A scope may contain \":\" and may not contain \",\". An empty set is the empty string, written \"0:\".",
+    "exp": "the moment the grant stops being one, as whole Unix seconds UTC, in decimal. Mandatory: there is no grant without one, and no second message shape that omits it. The server refuses from exp onwards (exp itself is already too late) and allows no clock skew.",
+    "serial": "names this one grant so a future revocation list has something to name. Mandatory, 1-64 bytes, any bytes but control characters. Nothing verifies it yet.",
+    "whyCounted": "Length-prefixed rather than joined with a delimiter. The v1 message was account_id \":\" dbname \":\" scope_list and was unambiguous only because the first two fields banned \":\" and the scope list was the whole tail — an argument that has to be re-made every time a field is added. With five fields it fails: the two cases named \"a scope eating the expiry\" below are different grants that a colon-joined format writes identically. A count in front of every field leaves nothing for a delimiter to be mistaken for.",
+    "cases": [
+      {
+        "name": "plain",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [
+          "articles:read",
+          "billing:write"
+        ],
+        "exp": 1789995600,
+        "serial": "01K5ZQ9P7B3N4M6R8T0V2W4X6Y",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n27:articles:read,billing:write\n10:1789995600\n26:01K5ZQ9P7B3N4M6R8T0V2W4X6Y\n",
+        "sig": "03dd75884187f15678be0ef3f70a74525250a28028d763455eaaa9014ef96319"
+      },
+      {
+        "name": "the same set written in another order, with a repeat — must sign identically to \"plain\"",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [
+          "billing:write",
+          "articles:read",
+          "billing:write"
+        ],
+        "exp": 1789995600,
+        "serial": "01K5ZQ9P7B3N4M6R8T0V2W4X6Y",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n27:articles:read,billing:write\n10:1789995600\n26:01K5ZQ9P7B3N4M6R8T0V2W4X6Y\n",
+        "sig": "03dd75884187f15678be0ef3f70a74525250a28028d763455eaaa9014ef96319"
+      },
+      {
+        "name": "no scopes at all — a legal grant of nothing, third field empty",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [],
+        "exp": 1789995600,
+        "serial": "01K5ZQ9P7B3N4M6R8T0V2W4X6Z",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n0:\n10:1789995600\n26:01K5ZQ9P7B3N4M6R8T0V2W4X6Z\n",
+        "sig": "71e6cf054e5a6130b769e8605ca9a13e29f6d6e8557fd9ee722d33aeaf69f093"
+      },
+      {
+        "name": "a serial holding \":\" and \",\" — legal, because the count and not a character table is what bounds a field",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [
+          "catalog:read"
+        ],
+        "exp": 1789995600,
+        "serial": "2026:001,reissued",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n12:catalog:read\n10:1789995600\n17:2026:001,reissued\n",
+        "sig": "94be00204cb46c1c9fb2a5fd606c94fd726fdfb2e72f779eccd263b5a4849349"
+      },
+      {
+        "name": "a scope eating the expiry — one half of the pair a colon-joined format would confuse",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [
+          "x"
+        ],
+        "exp": 100,
+        "serial": "200:z",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n1:x\n3:100\n5:200:z\n",
+        "sig": "609516547f7be82b47dbba1cdf238fa017424b66f1e0973658d6309b85ed3ab2"
+      },
+      {
+        "name": "the other half, which must sign differently",
+        "accountId": "acme",
+        "dbname": "main",
+        "scopes": [
+          "x:100"
+        ],
+        "exp": 200,
+        "serial": "z",
+        "message": "sapedb/scopes:v2\n4:acme\n4:main\n5:x:100\n3:200\n1:z\n",
+        "sig": "cba22991a3288445bee1e652d920e92b15eef9af590665f174ccdc92daa2b9fa"
+      },
+      {
+        "name": "a name at the length limit, and an expiry far out",
+        "accountId": "0",
+        "dbname": "p",
+        "scopes": [
+          "a"
+        ],
+        "exp": 4102444800,
+        "serial": "s",
+        "message": "sapedb/scopes:v2\n1:0\n1:p\n1:a\n10:4102444800\n1:s\n",
+        "sig": "c2c6d6a8c649e711a5820416e8c97a1fd210e7c97ec2ffb5c85beacdf4b8f973"
+      }
+    ]
+  }
 }

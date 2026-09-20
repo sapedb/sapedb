@@ -52,12 +52,11 @@ type Client struct {
 	// TCP/TLS dial, including the handshake itself. See Options.RequestTimeout.
 	requestTimeout time.Duration
 
-	// scopes and grant are what Present was given: a set of scopes and the
-	// signature, made with the server's secret, that makes them worth
-	// something. Held on the connection because they go out with every
-	// Invoke; holding them changes nothing about who may issue them.
-	scopes []string
-	grant  string
+	// grant is what Present was given: a set of scopes, an expiry, a serial,
+	// and the signature — made with the server's secret — that makes the rest
+	// of it worth something. Held on the connection because it goes out with
+	// every Invoke; holding it changes nothing about who may issue one.
+	grant Grant
 
 	// subscription is the frame id of the subscription this connection is
 	// carrying, and subscribed says whether it is carrying one at all. Zero
@@ -84,11 +83,38 @@ type Client struct {
 //
 // Presenting a grant is not cumulative and not a request: the scopes sent are
 // the ones named here, and the server decides what they are worth by checking
-// the signature against the account and database the call actually reached.
-// Calling it again replaces what was presented; calling it with an empty grant
-// clears it.
-func (c *Client) Present(scopes []string, grant string) {
-	c.scopes, c.grant = scopes, grant
+// the signature against the account and database the call actually reached —
+// and against its own clock, because a grant now carries the moment it stops
+// being one. Calling it again replaces what was presented; calling it with a
+// zero Grant, or any Grant with no Signature, clears it.
+func (c *Client) Present(grant Grant) {
+	c.grant = grant
+}
+
+// Grant is a scope grant as a client carries it: the fields the server's
+// secret was used to sign, and the signature over them.
+//
+// Every field is carried, none is computed. This client cannot make a
+// Signature and cannot make an Expires or a Serial that a Signature would
+// cover — they arrive together from whoever issued the connection string, and
+// this type is the envelope they travel in. It is a struct rather than four
+// arguments because two of the four are strings: Present(scopes, exp, serial,
+// sig) compiles just as happily with the last two the wrong way round, and
+// what it would produce is a grant that silently never verifies.
+type Grant struct {
+	// Scopes is the set being presented, in any order — the server sorts and
+	// de-duplicates before it checks the signature.
+	Scopes []string
+	// Expires is when the grant stops being one. Signed and checked to whole
+	// seconds; the server compares it against its own clock and allows no
+	// skew, so a grant is refused from this instant on, not after it.
+	Expires time.Time
+	// Serial names this particular grant. Carried and signed; nothing
+	// consults it yet.
+	Serial string
+	// Signature is the 64 lower-case hex characters minted over the other
+	// three fields together with the account and the database.
+	Signature string
 }
 
 // Welcome is what the server said when the connection opened.
@@ -370,8 +396,13 @@ func (c *Client) InvokeVersion(name string, version int, arguments map[string]an
 	}
 	// Omitted entirely when nothing was presented, so a client that never
 	// calls Present sends exactly the bytes it sent before grants existed.
-	if c.grant != "" {
-		body["grant"] = map[string]any{"scopes": c.scopes, "sig": c.grant}
+	if c.grant.Signature != "" {
+		body["grant"] = map[string]any{
+			"scopes": c.grant.Scopes,
+			"exp":    c.grant.Expires.Unix(),
+			"serial": c.grant.Serial,
+			"sig":    c.grant.Signature,
+		}
 	}
 	payload, err := c.ask(protocol.Invoke, body)
 	if err != nil {
