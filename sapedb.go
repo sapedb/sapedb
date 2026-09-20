@@ -10,10 +10,17 @@
 // cannot open.
 //
 // What this package does not do, said out loud so nobody plans around a
-// silence: there is no subscribe here, no pipelining, no connection pool and
-// no retry. One request is outstanding at a time. Those are not oversights
-// kept for later — they are things nobody has needed yet, and adding one is a
-// decision, not a fix.
+// silence: there is no pipelining, no connection pool and no retry. One
+// request is outstanding at a time. Those are not oversights kept for later —
+// they are things nobody has needed yet, and adding one is a decision, not a
+// fix.
+//
+// There is a subscribe, and there was not until task SAPE-26. The server has
+// carried Subscribe and Event frames, with a handler and tests, since before
+// this package existed; no client in this repository could read them, so
+// nothing had ever turned an Event back into a change and applied it. A
+// connection that subscribes carries the subscription and serves no other
+// request — see Client.Subscribe.
 package sapedb
 
 import (
@@ -31,26 +38,29 @@ import (
 // its type is a breaking change from the day this package is first tagged.
 // Adding a field with `omitempty` is not.
 type (
-	Access     = store.Access
-	Bound      = store.Bound
-	Catalogue  = store.Catalogue
-	Condition  = store.Condition
-	Endpoint   = store.Endpoint
-	Field      = store.Field
-	Index      = store.Index
-	Key        = store.Key
-	Operation  = store.Operation
-	Parameter  = store.Parameter
-	Partition  = store.Partition
-	Result     = store.Result
-	Rollup     = store.Rollup
-	Spec       = store.Spec
-	Step       = store.Step
-	Term       = store.Term
-	Connection = connection.Connection
-	Refused    = wire.ErrRefused
-	Welcome    = wire.Welcome
-	Options    = wire.Options
+	Access      = store.Access
+	Attribution = store.Attribution
+	Bound       = store.Bound
+	Catalogue   = store.Catalogue
+	Change      = store.Change
+	Condition   = store.Condition
+	Endpoint    = store.Endpoint
+	Field       = store.Field
+	Index       = store.Index
+	Key         = store.Key
+	Operation   = store.Operation
+	Parameter   = store.Parameter
+	Partition   = store.Partition
+	Result      = store.Result
+	Rollup      = store.Rollup
+	Spec        = store.Spec
+	Step        = store.Step
+	Term        = store.Term
+	Connection  = connection.Connection
+	Following   = wire.Following
+	Refused     = wire.ErrRefused
+	Welcome     = wire.Welcome
+	Options     = wire.Options
 )
 
 // Parse takes a connection string apart, naming whichever field is at fault.
@@ -171,6 +181,37 @@ func (c *Client) Invoke(name string, arguments map[string]any) (Result, error) {
 // parameter on Invoke because Invoke's signature is already published.
 func (c *Client) InvokeVersion(name string, version int, arguments map[string]any) (Result, error) {
 	return c.inner.InvokeVersion(name, version, arguments)
+}
+
+// Subscribe asks for this database's change log from an entry onwards. From
+// then on the connection carries the subscription and serves no other
+// request: call Subscribe on a connection of its own.
+//
+// Each change read with NextChange is the entry the server wrote, its number
+// and its attribution included, which is what lets a caller holding an engine
+// apply it and end up with the same log rather than one of its own.
+//
+// from is the first entry wanted, and entries are numbered from 1. A database
+// that has never been written to is at 0, so 1 asks for everything there has
+// ever been; 0 asks for an entry that cannot exist and is refused as
+// too_far_behind, the same answer as for an entry that has aged out. Being
+// told is the point: a follower quietly started somewhere other than where it
+// asked is one that believes it has seen changes it has not.
+//
+// The returned Following says where the feed begins, how far the log has got,
+// and the earliest entry the server still keeps.
+func (c *Client) Subscribe(from uint64) (Following, error) {
+	return c.inner.Subscribe(from)
+}
+
+// NextChange waits for the next change of this connection's subscription.
+//
+// It blocks with no deadline, whatever Options.RequestTimeout says: a
+// subscription that has caught up is waiting for somebody to write, and on a
+// quiet database that is not a fault. A caller that wants out closes the
+// connection from another goroutine.
+func (c *Client) NextChange() (Change, error) {
+	return c.inner.NextChange()
 }
 
 // Close says goodbye and hangs up.

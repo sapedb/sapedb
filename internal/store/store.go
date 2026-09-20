@@ -424,6 +424,34 @@ func (s *Store) takeCollectionID() (uint32, error) {
 	return next, nil
 }
 
+// reserveCollectionID moves the counter past a number that arrived with a
+// declaration instead of being handed out by takeCollectionID.
+//
+// Only a replay has numbers it did not choose. It is written down rather than
+// worked out from the collections in memory because that is what survives a
+// restart: the counter is the only record of which numbers have been used,
+// and a collection dropped later takes its declaration with it while its id
+// must stay spent — a new collection given a dead one's number would inherit
+// whatever index entries the drop did not reach.
+func (s *Store) reserveCollectionID(id uint32) error {
+	next := uint32(1)
+	if value, found, err := s.tree.Get(nextCollection); err != nil {
+		return err
+	} else if found {
+		if len(value) != 4 {
+			return fmt.Errorf("%w: the collection counter is %d bytes", ErrDamaged, len(value))
+		}
+		next = binary.BigEndian.Uint32(value)
+	}
+	if id < next {
+		return nil
+	}
+
+	var raw [4]byte
+	binary.BigEndian.PutUint32(raw[:], id+1)
+	return s.tree.Put(nextCollection, raw[:])
+}
+
 // deleteRange removes every key that starts with a prefix.
 //
 // Collected first and deleted afterwards: deleting while walking would be

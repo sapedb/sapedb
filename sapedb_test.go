@@ -16,7 +16,12 @@ import (
 	"github.com/sapedb/sapedb/internal/store"
 )
 
-// TestTheSurfaceIsExactlyTheseThirtyFourNames fails when a name is added to this
+// surfaceNames is how many names this package promises. It is written once
+// and read by the test and by what the test prints, because a number repeated
+// in prose is one that goes stale in the prose rather than in the check.
+const surfaceNames = 39
+
+// TestTheSurfaceIsExactlyTheseThirtyNineNames fails when a name is added to this
 // package, removed from it, or renamed. It is not a style rule: every name
 // here is a promise this project cannot take back without breaking somebody's
 // build, so adding one has to be a decision somebody made on purpose, not a
@@ -32,26 +37,34 @@ import (
 // The surface splits into two namespaces the way Go itself does: names at
 // package scope (types, the two functions), and method names on *Client,
 // which live in Client's own namespace and so can reuse a package-scope name
-// (Welcome the type alias, Welcome the method) without collision. Task 0068
-// §1.5 counts both: 20 aliases + Parse + Dial + Client + Explored = 24
-// package-scope names, plus 10 methods on Client = 34. It was 30 until Declare
-// — the frame that lets an operation be declared on a server that is already
-// running — and then InvokeVersion, which is how a caller reaches the older
-// versions a redeclaration leaves behind, each gave Client a method. The
-// thirty-third is Present: an operation may declare scopes, and until it
-// existed nothing in this package could present one, so such an operation was
-// one no caller of this client could ever run. The thirty-fourth is Establish,
-// the other half of Declare: an operation could be declared on a running
-// server and a collection could not, so a module that arrives with its own
-// collection, indexes and rollups could not be installed into an empty
-// database over a connection at all.
-func TestTheSurfaceIsExactlyTheseThirtyFourNames(t *testing.T) {
+// (Welcome the type alias, Welcome the method) without collision. Both are
+// counted: 23 aliases + Parse + Dial + Client + Explored = 27 package-scope
+// names, plus 12 methods on Client = 39. It was 30 until Declare — the frame
+// that lets an operation be declared on a server that is already running —
+// and then InvokeVersion, which is how a caller reaches the older versions a
+// redeclaration leaves behind, each gave Client a method. The thirty-third is
+// Present: an operation may declare scopes, and until it existed nothing in
+// this package could present one, so such an operation was one no caller of
+// this client could ever run. The thirty-fourth is Establish, the other half
+// of Declare: an operation could be declared on a running server and a
+// collection could not.
+//
+// The last five are one decision, task SAPE-26: the server has carried
+// Subscribe and Event frames since before this package existed and no client
+// here could read them, so nothing had ever turned an Event back into a
+// change. Subscribe and NextChange are how a caller reads the feed; Change is
+// what NextChange hands back, Attribution is the field on it that says who
+// made the entry, and Following is what the server answers a subscription
+// with. The three aliases are not decoration: a method signature naming
+// store.Change would put a path nobody outside this repository can open into
+// this package's documentation, which is the whole reason Client is a wrapper.
+func TestTheSurfaceIsExactlyTheseThirtyNineNames(t *testing.T) {
 	wantPackageScope := []string{
-		// The 20 value-type aliases.
-		"Access", "Bound", "Catalogue", "Condition", "Endpoint", "Field",
-		"Index", "Key", "Operation", "Parameter", "Partition", "Result",
-		"Rollup", "Spec", "Step", "Term", "Connection", "Refused", "Welcome",
-		"Options",
+		// The 23 value-type aliases.
+		"Access", "Attribution", "Bound", "Catalogue", "Change", "Condition",
+		"Endpoint", "Field", "Index", "Key", "Operation", "Parameter",
+		"Partition", "Result", "Rollup", "Spec", "Step", "Term", "Connection",
+		"Following", "Refused", "Welcome", "Options",
 		// The two package functions.
 		"Parse", "Dial",
 		// The two types declared (not aliased) by this package.
@@ -59,11 +72,12 @@ func TestTheSurfaceIsExactlyTheseThirtyFourNames(t *testing.T) {
 	}
 	wantClientMethods := []string{
 		"Welcome", "Operate", "Explore", "WhatIsHere", "Declare", "Establish",
-		"Present", "Invoke", "InvokeVersion", "Close",
+		"Present", "Invoke", "InvokeVersion", "Subscribe", "NextChange",
+		"Close",
 	}
 
-	if got, want := len(wantPackageScope)+len(wantClientMethods), 34; got != want {
-		t.Fatalf("this test's own want-lists total %d names, not 34 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
+	if got, want := len(wantPackageScope)+len(wantClientMethods), surfaceNames; got != want {
+		t.Fatalf("this test's own want-lists total %d names, not %d — the lists drifted, fix the lists (and this test's name) rather than the number", got, want)
 	}
 
 	gotPackageScope, gotMethods := readSurface(t)
@@ -71,7 +85,7 @@ func TestTheSurfaceIsExactlyTheseThirtyFourNames(t *testing.T) {
 	compareNames(t, "package-scope name", gotPackageScope, wantPackageScope)
 
 	if types := methodReceiverTypes(gotMethods); len(types) > 1 || (len(types) == 1 && types[0] != "Client") {
-		t.Fatalf("exported methods exist on a type other than Client, which the 34-name surface does not account for: %v", types)
+		t.Fatalf("exported methods exist on a type other than Client, which the %d-name surface does not account for: %v", surfaceNames, types)
 	}
 	compareNames(t, "Client method", gotMethods["Client"], wantClientMethods)
 }
@@ -209,10 +223,10 @@ func compareNames(t *testing.T, kind string, got, want []string) {
 	sort.Strings(missing)
 
 	if len(extra) > 0 {
-		t.Errorf("%s(s) exported that are not on the 32-name list: %s", kind, strings.Join(extra, ", "))
+		t.Errorf("%s(s) exported that are not on the %d-name list: %s", kind, surfaceNames, strings.Join(extra, ", "))
 	}
 	if len(missing) > 0 {
-		t.Errorf("%s(s) on the 32-name list that are no longer exported: %s", kind, strings.Join(missing, ", "))
+		t.Errorf("%s(s) on the %d-name list that are no longer exported: %s", kind, surfaceNames, strings.Join(missing, ", "))
 	}
 }
 

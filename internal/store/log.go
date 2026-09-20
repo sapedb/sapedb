@@ -118,17 +118,32 @@ func (s *Store) record(change Change) (uint64, error) {
 	if err := s.tree.Put(logKey(lsn), encoded); err != nil {
 		return 0, err
 	}
-	if change.By.WriteID != "" {
-		record, err := json.Marshal(done{LSN: lsn, Key: change.Key, Changed: 1})
-		if err != nil {
-			return 0, err
-		}
-		if err := s.tree.Put(writeKey(change.By.WriteID), record); err != nil {
-			return 0, err
-		}
+	if err := s.noteWrite(change); err != nil {
+		return 0, err
 	}
 
 	return lsn, s.trim()
+}
+
+// noteWrite remembers what a caller's own write id did, so the same id
+// arriving twice is answered rather than applied twice.
+//
+// Shared with Apply rather than written out at each end on purpose: what a
+// replica remembers about a write id has to be what the primary remembers,
+// because the case the id exists for — a client retrying a write it never
+// heard back about — is most likely to be aimed at the replica exactly when
+// something has gone wrong with the primary. Two spellings of this would
+// drift, and the drift would only show up as a duplicated write after a
+// failover.
+func (s *Store) noteWrite(change Change) error {
+	if change.By.WriteID == "" {
+		return nil
+	}
+	record, err := json.Marshal(done{LSN: change.LSN, Key: change.Key, Changed: 1})
+	if err != nil {
+		return err
+	}
+	return s.tree.Put(writeKey(change.By.WriteID), record)
 }
 
 // trim drops the oldest entries once there are more than the cap allows.
@@ -303,6 +318,15 @@ func (s *Store) Apply(change Change) error {
 		if err := s.install(*change.Spec); err != nil {
 			return err
 		}
+		// The number arrived rather than being handed out here, so the counter
+		// that hands them out has never heard of it. Left alone, the first
+		// collection this database declares of its own — which is what
+		// happens the moment it is promoted or used for anything besides
+		// following — would be given a number another collection is already
+		// storing documents under, and the two would share a keyspace.
+		if err := s.reserveCollectionID(change.Spec.ID); err != nil {
+			return err
+		}
 
 	case ChangeOperation:
 		if change.Operation == nil {
@@ -340,6 +364,12 @@ func (s *Store) Apply(change Change) error {
 		return err
 	}
 	if err := s.tree.Put(logKey(change.LSN), encoded); err != nil {
+		return err
+	}
+	// The caller's own id for the write goes with it, for the same reason the
+	// entry does: a retry aimed here after a failover has to be answered from
+	// what the write already did, not applied a second time.
+	if err := s.noteWrite(change); err != nil {
 		return err
 	}
 	if err := s.setLSN(change.LSN); err != nil {

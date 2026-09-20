@@ -58,6 +58,13 @@ type Client struct {
 	// Invoke; holding them changes nothing about who may issue them.
 	scopes []string
 	grant  string
+
+	// subscription is the frame id of the subscription this connection is
+	// carrying, and subscribed says whether it is carrying one at all. Zero
+	// is a legitimate frame id nowhere else, but the pair is kept explicit
+	// rather than leaning on that.
+	subscription uint32
+	subscribed   bool
 }
 
 // Present attaches a scope grant to this connection, to be sent with every
@@ -377,6 +384,108 @@ func (c *Client) InvokeVersion(name string, version int, arguments map[string]an
 	return result, nil
 }
 
+// Following is what the server says when a subscription starts: where the
+// feed begins, how far the log has got, and the earliest entry still kept.
+//
+// Oldest is worth reading rather than discarding. It is what says whether a
+// follower that has been away can carry on from where it stopped or has to be
+// rebuilt from a dump, and it is the difference between finding that out now
+// and finding it out halfway through a catch-up.
+type Following struct {
+	From   uint64 `json:"from"`
+	Latest uint64 `json:"latest"`
+	Oldest uint64 `json:"oldest"`
+}
+
+// Subscribe asks for the change log from an entry onwards. The connection
+// carries the subscription from then on and serves no other request.
+//
+// That exclusivity is the honest shape of this client rather than a
+// limitation invented here. Everything else in this package is one request
+// and one answer, read straight off the socket; a subscription sends frames
+// this connection never asked for, so a request issued alongside one would
+// read an event where it expected its answer. Requests are refused with a
+// sentence saying so, and a caller that wants both opens two connections —
+// which is what the server is built for, and what the tests here do.
+//
+// from is the first entry wanted, and entries are numbered from 1: a database
+// that has never been written to is at 0, so 1 means "everything there has
+// ever been" and 0 means an entry that cannot exist. The server refuses 0 as
+// too_far_behind rather than reading it as the beginning, which is the same
+// answer it gives for an entry that has been trimmed — a follower asking for
+// what is no longer there is told so instead of being started somewhere else
+// and left believing it saw everything.
+func (c *Client) Subscribe(from uint64) (Following, error) {
+	frame, err := c.request(protocol.Subscribe, map[string]any{"from": from})
+	if err != nil {
+		return Following{}, err
+	}
+	if frame.Type == protocol.Failure {
+		refused := &ErrRefused{}
+		if err := json.Unmarshal(frame.Payload, refused); err != nil {
+			return Following{}, fmt.Errorf("sapedb/wire: the server refused the subscription and the reason does not read: %w", err)
+		}
+		return Following{}, refused
+	}
+
+	answer := Following{}
+	if err := json.Unmarshal(frame.Payload, &answer); err != nil {
+		return Following{}, err
+	}
+	c.subscription, c.subscribed = frame.ID, true
+	return answer, nil
+}
+
+// NextChange waits for the next entry of the subscription and returns it.
+//
+// The entry is the one the server wrote, numbers and attribution included, so
+// a caller holding a store can hand it straight to Apply and end up with the
+// same log rather than one of its own.
+//
+// It blocks with no deadline, whatever RequestTimeout says. A subscription
+// that has caught up is waiting for somebody to write, which on a quiet
+// database is not a fault and can be a very long time; a deadline here would
+// turn "nothing is happening" into an error and make every follower treat its
+// own health check as a disconnection. A caller that wants out closes the
+// connection from another goroutine, which ends the read.
+func (c *Client) NextChange() (store.Change, error) {
+	if !c.subscribed {
+		return store.Change{}, errors.New("sapedb/wire: this connection is not carrying a subscription")
+	}
+	if err := c.conn.SetDeadline(time.Time{}); err != nil {
+		return store.Change{}, err
+	}
+
+	frame, err := c.reader.Read()
+	if err != nil {
+		return store.Change{}, err
+	}
+	if frame.ID != c.subscription {
+		return store.Change{}, fmt.Errorf("sapedb/wire: subscription %d was sent a frame for %d", c.subscription, frame.ID)
+	}
+
+	switch frame.Type {
+	case protocol.Event:
+		change := store.Change{}
+		if err := json.Unmarshal(frame.Payload, &change); err != nil {
+			return store.Change{}, fmt.Errorf("sapedb/wire: an event does not read as a change: %w", err)
+		}
+		return change, nil
+
+	case protocol.Failure:
+		// A subscription can fail after it started — the commonest way being
+		// that it fell behind what the log still keeps while it was reading.
+		refused := &ErrRefused{}
+		if err := json.Unmarshal(frame.Payload, refused); err != nil {
+			return store.Change{}, fmt.Errorf("sapedb/wire: the subscription ended and the reason does not read: %w", err)
+		}
+		return store.Change{}, refused
+
+	default:
+		return store.Change{}, fmt.Errorf("sapedb/wire: a subscription was sent a %s", frame.Type)
+	}
+}
+
 // ask sends a request and returns the payload of a successful answer, turning
 // a refusal into an error that carries the code.
 func (c *Client) ask(kind protocol.Type, body any) ([]byte, error) {
@@ -404,6 +513,14 @@ func (c *Client) ask(kind protocol.Type, body any) ([]byte, error) {
 // it — and cleared (a zero time.Time) when RequestTimeout is 0, in case this
 // connection ever reuses a net.Conn that already has one set.
 func (c *Client) request(kind protocol.Type, body any) (protocol.Frame, error) {
+	// A connection carrying a subscription has frames arriving on it that
+	// nothing asked for, so the next frame off the socket is not an answer to
+	// anything this sends. Refused by name rather than left to fail as
+	// "asked 4 and was answered 3", which is the same fault described as an
+	// accident.
+	if c.subscribed {
+		return protocol.Frame{}, errors.New("sapedb/wire: this connection is carrying a subscription; open another one for requests")
+	}
 	if c.requestTimeout > 0 {
 		if err := c.conn.SetDeadline(time.Now().Add(c.requestTimeout)); err != nil {
 			return protocol.Frame{}, err

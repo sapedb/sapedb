@@ -131,6 +131,72 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A client can read the change feed.** `Client.Subscribe(from)` and
+  `Client.NextChange()`, on `internal/wire` and on the public `sapedb`
+  surface, with `Change`, `Attribution` and `Following` alongside them.
+
+  The server has carried `Subscribe` and `Event` frames since before the
+  public package existed, with a handler (`internal/server/subscribe.go`) and
+  tests of its own; the engine has been able to apply an entry for as long
+  (`store.Apply`, and `internal/store`'s replica tests). Neither end was
+  wrong. What did not exist anywhere was the join: the word `Subscribe`
+  appeared zero times in `internal/wire` and zero times in `sapedb.go`, so no
+  client in this repository could read an `Event` frame at all, and nothing
+  had ever turned one back into a change and applied it. A feed nothing can
+  read is a feed nobody has proved is a feed.
+
+  A connection that subscribes carries the subscription and serves no other
+  request. That is the honest shape of this client rather than a limitation
+  invented for the occasion: everything else here is one request and one
+  answer read straight off the socket, and a subscription puts frames on that
+  socket which nothing asked for — so a request issued alongside one reads an
+  event where it expects its answer. It is refused by name, because the
+  alternative is what the mutation run printed with the guard removed:
+  `asked 5 and was answered 4`, which is the same fault described as an
+  accident. A caller that wants both opens two connections.
+
+  `NextChange` blocks with no deadline, whatever `Options.RequestTimeout`
+  says. A subscription that has caught up is waiting for somebody to write,
+  and on a quiet database that is not a fault; a deadline there would turn
+  "nothing is happening" into an error and teach every follower to ignore it.
+
+  Entries are numbered from 1, and `from` is the first entry wanted — so 1
+  asks for everything there has ever been. **0 is refused**, as
+  `too_far_behind`, which is the same answer an entry that has been trimmed
+  gets. That is deliberate and worth knowing before writing a follower: a
+  consumer quietly started somewhere other than where it asked is one that
+  believes it has seen changes it has not.
+
+  Measured end to end on a real `sapedbd` process
+  (`TestAChangeStreamedFromARunningDaemonRebuildsTheDatabase`): a collection
+  seeded before the daemon starts, an operation and three documents written
+  before anybody follows, then — while a second connection is following — a
+  collection established over the wire, four operations declared (one twice,
+  so an older version has to travel), and three inserts, an update and a
+  delete. Every change that arrives is applied into a blank engine in the test
+  process. The daemon is then stopped, its own file opened, and the two
+  databases compared **document by document, field by field, and declaration
+  by declaration, including every operation version** — never by counting,
+  because a document that arrived missing a field is still one document on
+  each side. The comparison has its own control,
+  `TestTheComparisonSeesADocumentThatLostAField`, which shows it failing on
+  exactly that difference while a count of documents agrees.
+
+  The public surface is now **39 names**, up from 34: five are this change
+  (`Subscribe`, `NextChange`, `Change`, `Attribution`, `Following`).
+
+- **Nothing in the product sets a retention cap.** Not new, and recorded here
+  because reading a feed is what makes it matter: `store.Retain` exists, no
+  server option reaches it, and so a daemon's log is never trimmed. The
+  `too_far_behind` refusal — the one thing that tells a follower it has fallen
+  too far behind to catch up and must be rebuilt from a dump — is therefore
+  unreachable against `sapedbd` today except by asking for entry 0. It is
+  reachable by an embedder who sets the cap, which is what
+  `TestASubscriptionFromAnEntryThatWasTrimmedIsRefused` does, on a server in
+  the test process rather than a separate one. A cap that nobody can set is a
+  disk that fills up while everything looks healthy; wiring one to a server
+  option is not done here.
+
 - **A collection can be declared on a server that is already running.** The
   `Declare` frame could put an *operation* on a live daemon; there was no way
   to put a *collection* there. So adding one still meant stopping the server
@@ -549,6 +615,47 @@ recorded, so its absence is not a claim that nothing changed before it.
   trusted on its own) in `internal/wire/wire_test.go`.
 
 ### Fixed
+
+- **A database that applies a declaration now spends the collection id that
+  arrived with it.** `Store.Apply` installs the spec it is given, numbers and
+  all, which is exactly right — a replica whose collections were numbered
+  differently would store its documents somewhere else. What it did not do was
+  move the counter those numbers are handed out from, because that counter is
+  only touched by `takeCollectionID`, and a replay takes nothing.
+
+  The counter is the only record of which ids have been used, so a database
+  that had followed a log and then declared a collection of its own — which is
+  what happens the moment it is promoted, or used for anything besides
+  following — was handed id 1 again. A collection id is written into the key of
+  every document and every index entry it has, so the new collection's
+  documents would have been written into the middle of the followed one's,
+  where a scan of either returns both. `Collection.live` already names this
+  hazard for a dropped collection ("a later collection given the same id would
+  inherit it"); a replica reached it without dropping anything.
+
+  `Apply` now calls `reserveCollectionID`, which moves the stored counter past
+  any id it did not hand out. Measured by
+  `TestAFollowerThatDeclaresOfItsOwnDoesNotReuseAnID`
+  (`internal/store/apply_test.go`), which first shows a database that hands out
+  its own numbers gives two collections two of them — so the repeat it looks
+  for afterwards is a finding and not a check that cannot fail. Before the fix
+  it read: `the follower gave "local" id 1, which "articles" already has`.
+
+- **A caller's own write id now travels with the entry it belongs to.** A write
+  carrying an `Attribution.WriteID` records, beside the log entry, what that id
+  did, so the same id arriving twice is answered rather than applied twice.
+  `record` wrote both; `Apply` wrote only the entry. A database fed somebody
+  else's log therefore held every change and remembered no write id, and
+  `Wrote` on it answered "never seen" for writes it was itself holding.
+
+  That is the one case the id exists for, on the one database it is most likely
+  to be asked of: a client that never heard back about a write retries it, and
+  after a failover the retry is aimed at the copy that was following. It would
+  have been applied a second time. Both ends now go through one `noteWrite`, so
+  what a replica remembers about a write id cannot drift from what the primary
+  remembers. Measured by `TestAWriteIDArrivesWithTheEntryItBelongsTo`, which
+  checks the id is answerable on the database that made the write before
+  asking the one that followed it.
 
 - The change log now says **who declared an operation**. Every other entry in
   it has carried an `Attribution` since there was a log — a write names the
