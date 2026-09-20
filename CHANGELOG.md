@@ -962,6 +962,54 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Changed
 
+- **The standing gate for shared reads no longer measures time.** SAPE-18 —
+  reads share a database instead of queueing behind each other — was guarded
+  by `TestReadsRunTogether` in `internal/server`, which timed one read against
+  four at once and failed when four cost more than three times one. It passed
+  on a developer laptop and failed all three of this repository's first
+  automated runs (4.59x, 3.41x, 3.62x), against a build whose reads do share,
+  printing `they are queueing, not sharing` — a sentence that was false each
+  time it appeared.
+
+  The cause was not a loaded CI box, which is what the test's own comment
+  claimed and what its 3x bar was chosen to allow for. Speedup from
+  concurrency is bounded by the number of cores: four counts over 4000
+  documents are four pieces of CPU work, so on a small runner four cannot cost
+  much under four times one however well the locking behaves. Measured at
+  `a6c8b48` on a 10-core machine, the unmodified sharing build reports
+  1.68-2.10x at `GOMAXPROCS=10`, 2.34-2.76x at 2 and 4.02-4.06x at 1 (8, 8 and
+  3 runs); a copy with the read lock made exclusive, so that reads genuinely
+  queue, reports 3.61-4.35x, 3.89-3.91x and 3.90-4.08x. At one thread the two
+  builds are indistinguishable and the old gate fails both. That is the whole
+  problem with it: on a machine short of cores it could not tell a lock from a
+  core count, and it reported the lock.
+
+  `TestReadsShareTheDatabase` replaces it and counts instead of timing. A read
+  now adds itself to a counter on the open database for as long as it is
+  inside the store — `database.reading` and `database.everReading` in
+  `internal/server/server.go`, two atomic adds on a call that walks a whole
+  collection — and the test asserts that the high-water mark reached two. A
+  database behind an exclusive lock cannot reach two on any number of cores,
+  because the second read has not been let in. The bar is two because two is
+  where sharing begins, not because a number was fitted to a measurement: 40
+  runs at `GOMAXPROCS` 10 and 2 every one reached 3 or 4, within 1-7ms, and
+  the serialized copy reports 1 at both. What the gate needs is more than one
+  thread, not a spare one — two threads busy with other work still run these
+  reads inside each other, only slower — and it asserts that precondition
+  loudly instead of skipping, because this repository's CI counts a skip as a
+  failure on purpose. What it does not claim is that sharing is worth
+  anything: it observes overlap, not speed, and a read path that overlapped
+  while contending on something inside itself would still pass.
+
+  `TestReadsRunTogetherAtN32` goes with it. It asserted nothing, loaded 20000
+  documents and opened 32 connections on every run of the suite, and logged a
+  ratio (19.45x on CI, 13.69-14.22x here) that is the reader count divided by
+  the cores available and says nothing about locking — an alarming number with
+  no claim attached to it.
+
+  Nothing about how the server locks changed: the read path takes the same
+  locks in the same order it did before.
+
 - `Spec.Indexes` (a collection's declared indexes, as `Collection.Spec()` and
   the `Catalogue` a `catalogue` explore answers with both hand it out) now
   marshals as `[]` for a collection declared with no indexes, instead of

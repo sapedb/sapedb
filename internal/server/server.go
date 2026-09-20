@@ -26,6 +26,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sapedb/sapedb/internal/build"
@@ -103,11 +104,54 @@ type database struct {
 	store *store.Store
 	file  vfs.File
 
+	// reading is how many reads are running on this database at this instant,
+	// and everReading the most that have ever run at once on it. Reads are the
+	// only thing allowed to overlap on one database — a writer takes the whole
+	// of it — so between them these two numbers are the whole of what "shared"
+	// means here.
+	//
+	// They are here because the read is the only thing that can say. Whether
+	// reads overlap is what SAPE-18 changed and what has to keep being true,
+	// and the ways to check it from outside the read measure something else.
+	// Timing one read against four measures cores: four counts are four pieces
+	// of CPU work, and on a machine with two of them four cannot finish in much
+	// under four times one however well the locking behaves — which is how the
+	// timing gate that used to stand here failed this repository's first three
+	// CI runs, against a build whose reads do share. Watching from another
+	// goroutine measures the scheduler: a sampler competes for threads with the
+	// reads it is watching, and on one thread it found no read inside the store
+	// at all, across 2000 goroutine profiles over eight seconds, while four
+	// connections read without pause. A read that counts itself is exact rather
+	// than sampled, and costs two atomic adds on a call that walks a whole
+	// collection.
+	//
+	// No other part of the server reads them; internal/server's own test does
+	// (parallel_reads_test.go), and a statistics surface would be their second
+	// reader if this server ever grows one.
+	reading     atomic.Int64
+	everReading atomic.Int64
+
 	// changed is closed and replaced every time something is committed. A
 	// subscriber waits on it instead of asking again and again: a feed that
 	// polls is a feed that is either late or wasteful, and usually both.
 	watch   sync.Mutex
 	changed chan struct{}
+}
+
+// read runs an operation the caller has already been allowed and found to be
+// a read, and keeps count of it while it runs. The read lock is the caller's
+// to hold and to drop; this only records what is happening under it.
+func (d *database) read(caller store.Caller, operation store.Operation, arguments map[string]any) (store.Result, error) {
+	atOnce := d.reading.Add(1)
+	for {
+		most := d.everReading.Load()
+		if atOnce <= most || d.everReading.CompareAndSwap(most, atOnce) {
+			break
+		}
+	}
+	defer d.reading.Add(-1)
+
+	return d.store.Run(caller, operation, arguments)
 }
 
 // notify wakes everything waiting for a change.
@@ -770,7 +814,7 @@ func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
 		}
 	}
 	if shared {
-		result, err := db.store.Run(caller, operation, asked.Arguments)
+		result, err := db.read(caller, operation, asked.Arguments)
 		db.mutex.RUnlock()
 		if err != nil {
 			return nil, err
