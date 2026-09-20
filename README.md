@@ -111,8 +111,14 @@ an older snapshot while writes continue past it, this paragraph is what
 changes — atomicity and durability of writes would not.
 
 **The change log** is written in the same transaction as the change it
-describes. One log serves replication, point-in-time recovery, change feeds and
-audit, so they cannot disagree with each other. `subscribe(from)` streams it.
+describes. One log, so replication, change feeds and audit cannot disagree with
+each other. `subscribe(from)` streams it, and `sapedb log` prints it.
+
+Point-in-time recovery is what a single log of this shape is *for*, and it is
+not built: no command steps the log to a chosen point, and `restore` only
+replays a dump into a database with nothing in it. The material is there and
+the command is not, which is a different sentence from the one this paragraph
+used to carry.
 
 **Partitions** divide a collection into files, decided by the primary key —
 by time (the key is a ULID, which already carries the millisecond it was made)
