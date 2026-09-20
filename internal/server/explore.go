@@ -22,8 +22,11 @@ import (
 // not already there. What it adds is that everything done this way is in the
 // change log with a name against it, which reading the files is not.
 
-// ErrNotOperator is an explore on a connection that has not proved itself.
-var ErrNotOperator = errors.New("sapedb/server: this connection may not explore; prove the server secret first")
+// ErrNotOperator is an explore or a declare on a connection that has not
+// proved itself. One sentinel for both, so codeFor keeps answering
+// "not_operator" whichever frame was refused — a client switches on the code,
+// and two codes for one reason would be two things to handle.
+var ErrNotOperator = errors.New("sapedb/server: this connection may not explore or declare; prove the server secret first")
 
 // elevating is the answer to the challenge in the welcome.
 type elevating struct {

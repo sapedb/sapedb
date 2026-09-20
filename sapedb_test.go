@@ -16,7 +16,7 @@ import (
 	"github.com/sapedb/sapedb/internal/store"
 )
 
-// TestTheSurfaceIsExactlyTheseThirtyNames fails when a name is added to this
+// TestTheSurfaceIsExactlyTheseThirtyOneNames fails when a name is added to this
 // package, removed from it, or renamed. It is not a style rule: every name
 // here is a promise this project cannot take back without breaking somebody's
 // build, so adding one has to be a decision somebody made on purpose, not a
@@ -34,8 +34,10 @@ import (
 // which live in Client's own namespace and so can reuse a package-scope name
 // (Welcome the type alias, Welcome the method) without collision. Task 0068
 // §1.5 counts both: 20 aliases + Parse + Dial + Client + Explored = 24
-// package-scope names, plus 6 methods on Client = 30.
-func TestTheSurfaceIsExactlyTheseThirtyNames(t *testing.T) {
+// package-scope names, plus 7 methods on Client = 31. It was 30 until
+// Declare — the frame that lets an operation be declared on a server that is
+// already running — gave Client a seventh method.
+func TestTheSurfaceIsExactlyTheseThirtyOneNames(t *testing.T) {
 	wantPackageScope := []string{
 		// The 20 value-type aliases.
 		"Access", "Bound", "Catalogue", "Condition", "Endpoint", "Field",
@@ -48,11 +50,11 @@ func TestTheSurfaceIsExactlyTheseThirtyNames(t *testing.T) {
 		"Client", "Explored",
 	}
 	wantClientMethods := []string{
-		"Welcome", "Operate", "Explore", "WhatIsHere", "Invoke", "Close",
+		"Welcome", "Operate", "Explore", "WhatIsHere", "Declare", "Invoke", "Close",
 	}
 
-	if got, want := len(wantPackageScope)+len(wantClientMethods), 30; got != want {
-		t.Fatalf("this test's own want-lists total %d names, not 30 — the lists drifted from task 0068 §1.5, fix the lists", got)
+	if got, want := len(wantPackageScope)+len(wantClientMethods), 31; got != want {
+		t.Fatalf("this test's own want-lists total %d names, not 31 — the lists drifted, fix the lists (and this test's name) rather than the number", got)
 	}
 
 	gotPackageScope, gotMethods := readSurface(t)
@@ -60,7 +62,7 @@ func TestTheSurfaceIsExactlyTheseThirtyNames(t *testing.T) {
 	compareNames(t, "package-scope name", gotPackageScope, wantPackageScope)
 
 	if types := methodReceiverTypes(gotMethods); len(types) > 1 || (len(types) == 1 && types[0] != "Client") {
-		t.Fatalf("exported methods exist on a type other than Client, which the 30-name surface does not account for: %v", types)
+		t.Fatalf("exported methods exist on a type other than Client, which the 31-name surface does not account for: %v", types)
 	}
 	compareNames(t, "Client method", gotMethods["Client"], wantClientMethods)
 }
@@ -198,10 +200,10 @@ func compareNames(t *testing.T, kind string, got, want []string) {
 	sort.Strings(missing)
 
 	if len(extra) > 0 {
-		t.Errorf("%s(s) exported that are not on the 30-name list: %s", kind, strings.Join(extra, ", "))
+		t.Errorf("%s(s) exported that are not on the 31-name list: %s", kind, strings.Join(extra, ", "))
 	}
 	if len(missing) > 0 {
-		t.Errorf("%s(s) on the 30-name list that are no longer exported: %s", kind, strings.Join(missing, ", "))
+		t.Errorf("%s(s) on the 31-name list that are no longer exported: %s", kind, strings.Join(missing, ", "))
 	}
 }
 

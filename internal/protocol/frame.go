@@ -50,12 +50,17 @@ const (
 	// connection that has not proved it.
 	Elevate Type = 11
 	Explore Type = 12
+	// Declare stores an operation on a database that is already being
+	// served, so that adding one no longer means stopping the server. Like
+	// Explore, it is refused on a connection that has not proved the
+	// server's own secret.
+	Declare Type = 13
 )
 
 var typeNames = map[Type]string{
 	Hello: "hello", Welcome: "welcome", Ping: "ping", Pong: "pong", Invoke: "invoke",
 	Result: "result", Failure: "failure", Subscribe: "subscribe", Event: "event", Goodbye: "goodbye",
-	Elevate: "elevate", Explore: "explore",
+	Elevate: "elevate", Explore: "explore", Declare: "declare",
 }
 
 // String names a frame type, or reports the code when this version has no name

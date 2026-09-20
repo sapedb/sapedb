@@ -7,6 +7,55 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- A `Declare` frame (type 13) on the protocol: an operation can now be
+  declared on a database that is already being served, without stopping the
+  server. Before it there was no path at all —
+  `grep -rn "Declare" internal/protocol/ internal/server/server.go` came back
+  empty, and `store.DeclareOperation` could only be reached through
+  `sapedb apply`, which opens the file directly and takes the exclusive lock
+  (`internal/cli`'s own package doc: "a command run while the server is up is
+  refused"). Creating an operation meant stopping the server, applying and
+  starting it again, which dropped every live connection for a change that
+  writes one key.
+
+  Refused on a connection that has not answered the welcome's challenge with
+  the server's own secret, exactly as `Explore` is, and reported with the
+  same `not_operator` code. It calls `store.DeclareOperation` — the same
+  function `sapedb apply` calls, so the same `validateOperation` — and
+  normalises nothing on the way in. That last part is the point:
+  `internal/store`'s `Explore` claims to check a typed access "with the same
+  validation a declaration gets", and for the limit rule that has never been
+  true, because `asOperation` forces `Limit` to `MostRows` when it is missing
+  *before* `validateOperation` runs, so "a scan must declare how many rows it
+  may return" can never fire through `Explore`. It does fire through
+  `Declare`. Measured by `TestDeclaringOverTheWireRefusesExactlyWhatApply
+  Refuses` (`internal/cli/declare_apply_test.go`), which runs one table of
+  fourteen declarations down both `apply()` and the wire against the same
+  database and demands the same sentence from each, and by
+  `TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn`
+  (`internal/server/declare_test.go`), which pins the `Declare`/`Explore`
+  asymmetry side by side.
+
+  It takes the database's write lock (`Lock`, not `RLock`) and commits, and a
+  name that is already declared gets a new version with every older one left
+  readable — `store.DeclareOperation`'s own behaviour, unchanged. The
+  end-to-end case is `TestAnOperationIsDeclaredOnARunningDaemonAndCalledOnThe
+  SameConnection` at the module root: it builds `cmd/sapedbd`, starts it,
+  declares an insert and a scan over one socket, calls both, redeclares the
+  scan, and ends by checking the daemon is the same pid, never signalled.
+
+  `fixtures/frames.json` gains `"declare": 13` and one case. **That file is
+  kept byte-identical in the TypeScript client's repository and nothing
+  compares the two copies — the change has to be carried across by hand.**
+  `TestTheDeclareFixtureIsTheStructTheServerDecodes` now decodes the case
+  with the server's real `declaring` struct and `DisallowUnknownFields`, so
+  at least this side cannot drift from its own fixture in silence.
+
+- `Client.Declare` on the public `sapedb` package and on `internal/wire`'s
+  client. The module-root surface is now 31 names, not 30, and
+  `TestTheSurfaceIsExactlyTheseThirtyNames` is renamed to match the number it
+  guards.
+
 - A public Go package, `sapedb` (`github.com/sapedb/sapedb`), at the module
   root: task 0068 §1's answer to "what does a Go client outside this
   repository import". Twenty type aliases for the value shapes a caller

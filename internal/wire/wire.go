@@ -224,6 +224,31 @@ func (c *Client) WhatIsHere() (store.Catalogue, error) {
 	return *answer.Here, nil
 }
 
+// Declare stores an operation on the database this connection is for, and
+// hands it back with the version it was given.
+//
+// Only an operator may: call Operate first, exactly as for Explore. Declaring
+// a name that is already declared writes a NEW version and leaves the older
+// ones readable — it does not replace anything — which is why the returned
+// Operation is worth reading rather than discarding: its Version is what
+// names this exact declaration once somebody has declared over the top of it.
+//
+// The body key is "operation", which is what the server's own `declaring`
+// struct decodes (internal/server/declare.go).
+func (c *Client) Declare(operation store.Operation) (store.Operation, error) {
+	payload, err := c.ask(protocol.Declare, map[string]any{"operation": operation})
+	if err != nil {
+		return store.Operation{}, err
+	}
+	answer := struct {
+		Operation store.Operation `json:"operation"`
+	}{}
+	if err := json.Unmarshal(payload, &answer); err != nil {
+		return store.Operation{}, err
+	}
+	return answer.Operation, nil
+}
+
 // Invoke runs a declared operation.
 //
 // The body key is "args", not "arguments": that is what the server's own

@@ -415,6 +415,18 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 				return err
 			}
 
+		case protocol.Declare:
+			body, err := s.declare(live, frame.Payload)
+			if err != nil {
+				if err := out.send(protocol.Frame{Type: protocol.Failure, ID: frame.ID}, failure(err)); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := out.send(protocol.Frame{Type: protocol.Result, ID: frame.ID}, body); err != nil {
+				return err
+			}
+
 		case protocol.Invoke:
 			result, err := s.invoke(live, frame.Payload)
 			if err != nil {

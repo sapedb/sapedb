@@ -108,6 +108,17 @@ func (c *Client) WhatIsHere() (Catalogue, error) {
 	return c.inner.WhatIsHere()
 }
 
+// Declare stores an operation on this connection's database, without the
+// server being stopped for it.
+//
+// Only an operator may: call Operate first, as for Explore. A name that is
+// already declared gets a new version and the older ones stay readable, so the
+// Operation handed back is worth keeping — its Version names this exact
+// declaration after somebody declares over the top of it.
+func (c *Client) Declare(operation Operation) (Operation, error) {
+	return c.inner.Declare(operation)
+}
+
 // Invoke runs a declared operation.
 func (c *Client) Invoke(name string, arguments map[string]any) (Result, error) {
 	return c.inner.Invoke(name, arguments)
