@@ -323,6 +323,9 @@ func TestDeleteAndCountAndTheClusteredWalk(t *testing.T) {
 	declareOp(t, store, Operation{
 		Name: "articles.count", Collection: "articles", Action: ActionCount,
 		Index: ClusteredIndex,
+		// Well above the six documents this test writes, so what is measured
+		// below is the count and not the ceiling.
+		Limit: 1000,
 	})
 	declareOp(t, store, Operation{
 		Name: "articles.page", Collection: "articles", Action: ActionScan,

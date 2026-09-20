@@ -28,16 +28,18 @@ import (
 //
 // One rule is not the same here, and saying so is the point of this paragraph:
 // the limit. asOperation caps Limit at MostRows when it is missing or too
-// large, BEFORE validateOperation runs, so "a scan must declare how many rows
-// it may return" can never fire through Explore — no matter what an operator
-// types. That is deliberate for a shell (see asOperation's own comment: an
-// operator who does not say is not asking for everything) and wrong for a
-// declaration, which is a promise about cost somebody else has to keep. This
-// paragraph used to read "checks it with the same validation a declaration
-// gets", full stop, and that sentence was wrong for exactly this rule for as
-// long as it stood. The asymmetry is now measured, side by side, in
-// internal/server's TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn
-// — added with the Declare frame, which does NOT cap and must not.
+// large, BEFORE validateOperation runs, so neither "a scan must declare how
+// many rows it may return" nor "a count must declare how far it walks" can
+// ever fire through Explore — no matter what an operator types. That is
+// deliberate for a shell (see asOperation's own comment: an operator who does
+// not say is not asking for everything) and wrong for a declaration, which is
+// a promise about cost somebody else has to keep. This paragraph used to read
+// "checks it with the same validation a declaration gets", full stop, and that
+// sentence was wrong for exactly this rule for as long as it stood. The
+// asymmetry is measured, side by side, in internal/server's
+// TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn and
+// TestACountDeclaredOverTheWireMustSayHowFarItWalks — one per action, both
+// against the Declare frame, which does NOT cap and must not.
 //
 // Two things follow from it being the same engine:
 //

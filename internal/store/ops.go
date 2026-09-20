@@ -683,15 +683,38 @@ func (s *Store) validateOperation(operation *Operation) error {
 				return err
 			}
 		}
-		if operation.Action == ActionScan && operation.Limit <= 0 {
+		// Both of them, now. A scan declares how many rows it may return; a
+		// count returns none, so what it has to declare is how far it walks.
+		//
+		// Until this rule covered the count, a count was the only action that
+		// could be declared without declaring what it costs — the limit was
+		// asked for on a scan, on a rollup read and on a composed batch, and
+		// a count slipped between them. That made "every declaration in this
+		// store says what it costs" a sentence with one exception in it, and
+		// an exception reachable by writing `"action": "count"` and leaving
+		// one field out. The walk is the whole cost of a count: a count over
+		// forty million documents returns the number 40000000 and the caller
+		// finds out how big the collection was by waiting, which is exactly
+		// what a declared limit exists to stop.
+		//
+		// compose.go's ceiling() has asked a count for a limit since composed
+		// operations landed. It is kept rather than folded into this one,
+		// because it reads declarations already on disk — including ones
+		// written before this line existed.
+		if operation.Limit <= 0 {
+			if operation.Action == ActionCount {
+				return fmt.Errorf("%w: a count must declare how far it walks — it hands back a number rather than rows, so the walk is the whole of what it costs", ErrDeclaration)
+			}
 			return fmt.Errorf("%w: a scan must declare how many rows it may return", ErrDeclaration)
 		}
 		if err := scanAcross(collection, operation); err != nil {
 			return err
 		}
-		if operation.Limit < 0 {
-			return fmt.Errorf("%w: a limit of %d", ErrDeclaration, operation.Limit)
-		}
+		// A `Limit < 0` refusal used to sit here, after scanAcross, and it was
+		// the only thing that caught a negative limit on a count. The rule
+		// above now covers every limit that is not positive, for both actions,
+		// so that branch had become unreachable — and an unreachable refusal
+		// is a rule a reader believes is doing work.
 
 	case ActionBatch:
 		if len(operation.Steps) == 0 {

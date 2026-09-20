@@ -5,6 +5,67 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ## Unreleased
 
+### Breaking
+
+- **A `count` must now declare a `limit`.** A declaration with
+  `"action": "count"` and no positive `"limit"` is refused when it is
+  declared — through `sapedb apply`, through the `Declare` frame, and
+  through `store.DeclareOperation` itself.
+
+  What will be refused after upgrading:
+
+  ```json
+  { "name": "orders.how_many", "collection": "orders", "action": "count",
+    "index": "by_customer" }
+  ```
+
+  ```
+  sapedb/store: the declaration does not make sense: a count must declare how
+  far it walks — it hands back a number rather than rows, so the walk is the
+  whole of what it costs
+  ```
+
+  How to fix it: add a `limit`, and make it the largest number of documents
+  this count is allowed to walk over.
+
+  ```json
+  { "name": "orders.how_many", "collection": "orders", "action": "count",
+    "index": "by_customer", "limit": 100000 }
+  ```
+
+  Pick the number deliberately, because it changes an answer rather than only
+  refusing one: a count that reaches its limit stops there, reports that
+  limit, and sets `truncated` on the result. That behaviour is not new —
+  `run()` has stopped a count at its declared limit for as long as counts
+  have had one — but a count that had no limit never stopped, so a
+  declaration that was silently unbounded and now names a number will start
+  answering `limit` with `truncated: true` instead of the true total for any
+  stretch larger than that number. A caller that ignores `truncated` reads
+  that as the count.
+
+  Why it is being done before v1 rather than after: a rule that refuses a
+  declaration cannot be added to a released database engine. Every schema
+  already written down would stop applying at whatever version added it, and
+  the only kind answer at that point is to not add it — which means the gap
+  would have been permanent. `count` was the one action that could be
+  declared without declaring its cost: the limit was required of a scan, of a
+  rollup read and of a composed batch, and the count fell between them. The
+  cost it said nothing about is a full walk of the collection.
+
+  This is a declaration-time rule only. Nothing about how a stored count runs
+  changed, no stored declaration is rewritten, and a `count` typed at the
+  shell is unaffected — `Explore` fills a limit in for a typed access before
+  it validates anything, for a count exactly as it always has for a scan.
+  That asymmetry is deliberate and is now measured on both actions
+  (`TestACountDeclaredOverTheWireMustSayHowFarItWalks`,
+  `internal/server`).
+
+  One refusal disappeared with it: a negative limit on a count used to be
+  refused with `a limit of -1`, a sentence from a branch that sat further
+  down `validateOperation`. That branch is gone, because the new rule covers
+  every limit that is not positive, and a count with `"limit": -1` is now
+  refused with the sentence above instead.
+
 ### Added
 
 - Composed operations: a step of a batch may name an operation that is already

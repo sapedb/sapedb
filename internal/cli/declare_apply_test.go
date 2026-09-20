@@ -64,6 +64,32 @@ func TestDeclaringOverTheWireRefusesExactlyWhatApplyRefuses(t *testing.T) {
 			refused: "sapedb/store: the declaration does not make sense: a scan must declare how many rows it may return",
 		},
 		{
+			// The count's own half of the limit rule. A scan declares how many
+			// rows it may return; a count returns none, so what it declares is
+			// how far it walks — and until that rule covered the count, this
+			// row was accepted by both paths, which made `"action": "count"`
+			// the one declaration in this store that said nothing about what
+			// it costs.
+			//
+			// Measured here rather than through Explore on purpose: the
+			// shell's asOperation fills the limit in for a count exactly as it
+			// does for a scan, so a test taken down that path would be green
+			// whether this rule existed or not.
+			name: "a count with no limit",
+			operation: store.Operation{
+				Name: "notes.how_many", Collection: "notes", Action: store.ActionCount, Index: "by_author",
+			},
+			refused: "sapedb/store: the declaration does not make sense: a count must declare how far it walks — it hands back a number rather than rows, so the walk is the whole of what it costs",
+		},
+		{
+			name: "a count with a negative limit",
+			operation: store.Operation{
+				Name: "notes.backwards_count", Collection: "notes", Action: store.ActionCount,
+				Index: "by_author", Limit: -1,
+			},
+			refused: "sapedb/store: the declaration does not make sense: a count must declare how far it walks — it hands back a number rather than rows, so the walk is the whole of what it costs",
+		},
+		{
 			name: "a collection that was never declared",
 			operation: store.Operation{
 				Name: "ghosts.all", Collection: "ghosts", Action: store.ActionScan, Limit: 10,
@@ -174,6 +200,16 @@ func TestDeclaringOverTheWireRefusesExactlyWhatApplyRefuses(t *testing.T) {
 				Key:   &store.Term{Arg: "id"},
 			},
 		},
+		{
+			// The control for the two count rows above. Without it they could
+			// both be passing because something refuses every count, which is
+			// a different bug wearing the same green.
+			name: "a count that declares how far it walks",
+			operation: store.Operation{
+				Name: "notes.counted", Collection: "notes", Action: store.ActionCount,
+				Index: "by_author", Limit: 100,
+			},
+		},
 	}
 
 	client, srv := pairedServer(t)
@@ -219,8 +255,8 @@ func TestDeclaringOverTheWireRefusesExactlyWhatApplyRefuses(t *testing.T) {
 		})
 	}
 
-	if accepted != 2 {
-		t.Fatalf("%d of the table's control rows were accepted by both paths, want 2 — a table of nothing but refusals measures nothing", accepted)
+	if accepted != 3 {
+		t.Fatalf("%d of the table's control rows were accepted by both paths, want 3 — a table of nothing but refusals measures nothing", accepted)
 	}
 }
 

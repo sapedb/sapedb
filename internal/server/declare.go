@@ -27,17 +27,19 @@ import (
 //     calls, which begins by calling validateOperation. There is no second
 //     copy of the rules here and nothing is normalised on the way in. That is
 //     the one property this file exists to keep, and it is measured rather
-//     than asserted — see TestDeclareRefusesExactlyWhatApplyRefuses and
-//     TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn.
+//     than asserted — see TestDeclareRefusesExactlyWhatApplyRefuses,
+//     TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn and
+//     TestACountDeclaredOverTheWireMustSayHowFarItWalks.
 //
 // The warning is next door. internal/store's Explore says it checks a typed
 // access "with the same validation a declaration gets", and for the limit rule
 // that has never been true: asOperation forces Limit to MostRows when it is
-// missing or too large, BEFORE validateOperation runs, so "a scan must declare
-// how many rows it may return" can never fire through Explore. That is the
-// right answer for a shell — an operator who did not say is not asking for
-// everything — and the wrong answer for a declaration, which is a promise
-// about cost that somebody has to keep. Nothing here caps anything.
+// missing or too large, BEFORE validateOperation runs, so neither "a scan must
+// declare how many rows it may return" nor "a count must declare how far it
+// walks" can ever fire through Explore. That is the right answer for a shell —
+// an operator who did not say is not asking for everything — and the wrong
+// answer for a declaration, which is a promise about cost that somebody has to
+// keep. Nothing here caps anything.
 
 // declaring is one operation to store, and which database to store it in.
 type declaring struct {
