@@ -72,7 +72,7 @@ func TestABoundThatFallsAwayUndoesWhatScanAcrossPromised(t *testing.T) {
 		Projection: []string{"account"},
 		Limit:      10,
 	}
-	if _, err := store.DeclareOperation(loose); err != nil {
+	if _, err := store.DeclareOperation(Caller{}, loose); err != nil {
 		t.Fatalf("scanAcross refused this after all, which would be the fix: %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestADirectionOnARollupReadIsRefusedAtDeclarationAndAtTheGoCallToo(t *testi
 		t.Fatal(err)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name:       "lines.totals",
 		Collection: "lines",
 		Action:     ActionTotals,
@@ -216,7 +216,7 @@ func TestACountIsTheSameNumberFromEitherEnd(t *testing.T) {
 		Direction:  &Term{Arg: "direction"},
 		Limit:      4,
 	}
-	if _, err := store.DeclareOperation(counter); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, counter); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a direction on a count: want ErrDeclaration, got %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestACountIsTheSameNumberFromEitherEnd(t *testing.T) {
 	// writes it down.
 	counter.Direction = &Term{Value: DirectionReverse}
 	counter.Input = nil
-	if _, err := store.DeclareOperation(counter); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, counter); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a fixed direction on a count: want ErrDeclaration, got %v", err)
 	}
 

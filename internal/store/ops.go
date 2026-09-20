@@ -342,7 +342,29 @@ type Result struct {
 
 // DeclareOperation stores an operation, as a new version if the name is
 // already declared.
-func (s *Store) DeclareOperation(operation Operation) (Operation, error) {
+//
+// The caller is here for one reason: the change log says who. Every other
+// entry in that log has carried an Attribution since there was a log — a
+// write names the operation that made it and the actor it ran for, and even a
+// read through the shell names "explore" and the operator. A declaration
+// carried none. That was tolerable while declaring meant `sapedb apply`,
+// which means holding the file's exclusive lock, which means the server is
+// stopped and whoever did it was standing at the machine. It stopped being
+// tolerable with the Declare frame: an operation can now be declared from
+// another host, over a live connection, against a running server — and the
+// one entry in the log that records the most consequential kind of change,
+// the one that decides what everybody else may do, was the one entry with
+// nobody's name on it.
+//
+// What the actor is worth differs by path and neither path pretends
+// otherwise. Over the wire it is the account whose connection string reached
+// this database, and it is written by the server rather than sent by the
+// client. Through `sapedb apply` it is the account the command was pointed
+// at, which is a label rather than a proof: running apply means holding the
+// database file, and anybody holding the file could have written the bytes by
+// hand. In both cases it is the best name available at that point, which is
+// what an audit trail is made of.
+func (s *Store) DeclareOperation(caller Caller, operation Operation) (Operation, error) {
 	if err := s.validateOperation(&operation); err != nil {
 		return Operation{}, err
 	}
@@ -363,7 +385,14 @@ func (s *Store) DeclareOperation(operation Operation) (Operation, error) {
 	if err := s.tree.Put(operationKey(operation.Name, operation.Version), encoded); err != nil {
 		return Operation{}, err
 	}
-	if _, err := s.record(Change{Kind: ChangeOperation, Operation: &operation}); err != nil {
+	// "declare" rather than the operation's own name: the Attribution says
+	// which operation DID this, and what did this was the act of declaring.
+	// The operation being declared is already on the entry, in Operation.
+	if _, err := s.record(Change{
+		Kind:      ChangeOperation,
+		Operation: &operation,
+		By:        Attribution{Operation: "declare", Actor: caller.Actor},
+	}); err != nil {
 		return Operation{}, err
 	}
 	return operation, nil

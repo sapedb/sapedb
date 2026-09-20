@@ -89,7 +89,13 @@ func (s *Server) declare(live *session, payload []byte) ([]byte, error) {
 	db.mutex.Lock()
 	defer db.mutex.Unlock()
 
-	stored, err := db.store.DeclareOperation(asked.Operation)
+	// Named by the account, exactly as explore does, and for the same reason:
+	// that is the only identity this connection has proved. It is written here
+	// rather than read out of the payload — a `declaring` has no field for it,
+	// and if it had one it would be a name the caller chose for itself.
+	caller := store.Caller{Actor: live.opening.Account + " (operator)"}
+
+	stored, err := db.store.DeclareOperation(caller, asked.Operation)
 	if err != nil {
 		// DeclareOperation validates before it writes, so the ordinary
 		// refusal has left nothing behind. The one that has is the narrow

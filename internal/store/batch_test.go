@@ -23,7 +23,7 @@ func checkedRequire(t *testing.T, seed int64) (*Store, *Collection) {
 		t.Fatalf("declare widgets: %v", err)
 	}
 	yes := true
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "widgets.check", Collection: "widgets", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "id", Type: TypeString, Required: true},
@@ -188,7 +188,7 @@ func TestAPrimaryKeyThatIsASelfReferentialContainerIsRefusedNotFormatted(t *test
 	if _, err := s.Declare(Spec{Name: "widgets", Key: Key{Path: "id", Type: TypeString}}); err != nil {
 		t.Fatalf("declare: %v", err)
 	}
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "widgets.make", Collection: "widgets", Action: ActionInsert,
 		Input:    []Parameter{{Name: "id", Type: TypeAny, Required: true}},
 		Document: map[string]Term{"id": {Arg: "id"}},

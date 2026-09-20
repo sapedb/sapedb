@@ -214,7 +214,7 @@ func TestAScanOfAPartitionedCollectionRefusesALooseFieldAtEveryPosition(t *testi
 			`"a"`, []string{`"n"`, `"b"`}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := store.DeclareOperation(Operation{
+			_, err := store.DeclareOperation(Caller{}, Operation{
 				Name: "loose." + c.name, Collection: "wide", Action: ActionScan,
 				Index: c.index, Limit: 10,
 				From: &Endpoint{Terms: c.from}, To: &Endpoint{Terms: c.to},
@@ -242,7 +242,7 @@ func TestAScanOfAPartitionedCollectionAcceptsEveryFieldPinnedAtEveryWidth(t *tes
 		{"w3 (N=3) pinned", "w3", []Term{{Value: "x"}, {Value: 9.0}, {Value: true}}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := store.DeclareOperation(Operation{
+			if _, err := store.DeclareOperation(Caller{}, Operation{
 				Name: "widen." + c.name, Collection: "wide", Action: ActionScan,
 				Index: c.index, Limit: 10,
 				From: &Endpoint{Terms: c.terms}, To: &Endpoint{Terms: c.terms},
@@ -267,7 +267,7 @@ func TestARollupReadOfAPartitionedCollectionRefusesALooseGroupField(t *testing.T
 	// reason. Measured: "in" then "out" (the natural-looking ascending
 	// order) is BACKWARDS for a descending field and is refused by
 	// refusedBackwardsRange instead, never reaching totalsAcross at all.
-	_, err := store.DeclareOperation(Operation{
+	_, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "loose.g2", Collection: "wide", Action: ActionTotals,
 		Rollup: "g2", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "cash"}, {Value: "b"}}},
@@ -281,7 +281,7 @@ func TestARollupReadOfAPartitionedCollectionRefusesALooseGroupField(t *testing.T
 // be accepted.
 func TestARollupReadOfAPartitionedCollectionAcceptsAFullyPinnedGroup(t *testing.T) {
 	store := lockstepStore(t, 5404)
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "widen.g2", Collection: "wide", Action: ActionTotals,
 		Rollup: "g2", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "cash"}, {Value: "in"}}},
@@ -302,14 +302,14 @@ func TestARollupReadOfAPartitionedCollectionAcceptsAFullyPinnedGroup(t *testing.
 func TestABoundIsTypeCheckedAgainstItsOwnFieldNotAnother(t *testing.T) {
 	store := lockstepStore(t, 5405)
 
-	_, err := store.DeclareOperation(Operation{
+	_, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "type.n", Collection: "wide", Action: ActionScan,
 		Index: "w3", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: "not a number"}}},
 	})
 	mustNameOnly(t, err, `"n"`, `"a"`, `"b"`)
 
-	_, err = store.DeclareOperation(Operation{
+	_, err = store.DeclareOperation(Caller{}, Operation{
 		Name: "type.b", Collection: "wide", Action: ActionScan,
 		Index: "w3", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: 9.0}, {Value: 7.0}}},
@@ -318,7 +318,7 @@ func TestABoundIsTypeCheckedAgainstItsOwnFieldNotAnother(t *testing.T) {
 
 	// The rollup branch of the same check() call — the equivalent path a
 	// table built only from the scan side would never reach.
-	_, err = store.DeclareOperation(Operation{
+	_, err = store.DeclareOperation(Caller{}, Operation{
 		Name: "type.kind", Collection: "wide", Action: ActionTotals,
 		Rollup: "g2", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "cash"}, {Value: 3.0}}},
@@ -348,7 +348,7 @@ func TestABoundIsTypeCheckedAgainstItsOwnFieldNotAnother(t *testing.T) {
 // for the same correction.
 func TestAnUnencodableConstantBoundIsNamedAtItsOwnField(t *testing.T) {
 	store := lockstepStore(t, 5406)
-	_, err := store.DeclareOperation(Operation{
+	_, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "unencodable.z", Collection: "wide", Action: ActionScan,
 		Index: "w2any", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: []any{1.0, 2.0}}}},
@@ -380,14 +380,14 @@ func TestAnUnencodableConstantBoundIsNamedAtItsOwnField(t *testing.T) {
 func TestARollupBoundaryNumberNamesItsOwnField(t *testing.T) {
 	store := lockstepStore(t, 5412)
 
-	_, err := store.DeclareOperation(Operation{
+	_, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "boundary.toolarge", Collection: "wide", Action: ActionTotals,
 		Rollup: "gnum", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "cash"}, {Value: int(1) << 60}}},
 	})
 	mustNameOnly(t, err, `"amt"`, `"account"`)
 
-	_, err = store.DeclareOperation(Operation{
+	_, err = store.DeclareOperation(Caller{}, Operation{
 		Name: "boundary.nan", Collection: "wide", Action: ActionTotals,
 		Rollup: "gnum", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "cash"}, {Value: math.NaN()}}},
@@ -434,7 +434,7 @@ func TestABackwardsRangeInASecondOrThirdFieldIsRefused(t *testing.T) {
 	// w2's second field is DESCENDING, so ascending values there are
 	// backwards even though the first field (a="x") is pinned identically
 	// at both ends.
-	_, err := store.DeclareOperation(Operation{
+	_, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "back.w2", Collection: "plain", Action: ActionScan,
 		Index: "w2", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: 1.0}}},
@@ -450,7 +450,7 @@ func TestABackwardsRangeInASecondOrThirdFieldIsRefused(t *testing.T) {
 	// Same shape, three fields: backwards only in the middle one (n,
 	// DESCENDING), with the first and third pinned identically at both
 	// ends.
-	_, err = store.DeclareOperation(Operation{
+	_, err = store.DeclareOperation(Caller{}, Operation{
 		Name: "back.w3", Collection: "plain", Action: ActionScan,
 		Index: "w3", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: 1.0}, {Value: true}}},
@@ -485,7 +485,7 @@ func TestACorrectlyOrderedDescendingRangeIsAcceptedAndReadsAllRows(t *testing.T)
 	// show up as an extra row.
 	put(t, collection, map[string]any{"a": "y", "n": 3.0})
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "fwd.w2", Collection: "plain", Action: ActionScan,
 		Index: "w2", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: 5.0}}},
@@ -501,7 +501,7 @@ func TestACorrectlyOrderedDescendingRangeIsAcceptedAndReadsAllRows(t *testing.T)
 		t.Fatalf("From[x,5]/To[x,1] on w2 returned %d rows, want 5: %v", result.Count, result.Rows)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "fwd.w3", Collection: "plain", Action: ActionScan,
 		Index: "w3", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "x"}, {Value: 5.0}, {Value: true}}},

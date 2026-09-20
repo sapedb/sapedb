@@ -287,6 +287,44 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Fixed
 
+- The change log now says **who declared an operation**. Every other entry in
+  it has carried an `Attribution` since there was a log — a write names the
+  operation that made it and the actor it ran for, and even a read through the
+  shell names `explore` and the operator who typed it. A declaration named
+  nobody: `store.DeclareOperation` recorded `{"kind":"operation"}` with an
+  empty `by`.
+
+  That was survivable while declaring meant `sapedb apply`, which takes the
+  database file's exclusive lock and therefore cannot run while the server is
+  up: whoever declared anything was standing at the machine with everything
+  else stopped. The `Declare` frame ended it. An operation can now be declared
+  from another host, over a live connection, against a running server — and
+  the entry with nobody's name on it was the one recording the change that
+  decides what everybody else may do.
+
+  Entries now read `"by": {"operation":"declare","actor":"..."}`. The actor is
+  the account whose connection reached the database, written by the server,
+  never read out of the request — over the wire it is `"<account> (operator)"`,
+  matching what an explore already records, and through `sapedb apply` it is
+  `"<account> (apply)"`. What the name is worth differs by path and neither
+  pretends otherwise: over the wire the account was proved by the signature on
+  the connection string, while running `apply` means holding the file, so the
+  account there is a label rather than a proof. A label is still the difference
+  between an audit trail and a blank.
+
+  `store.DeclareOperation` takes a `store.Caller` as its first argument for
+  this, the way `Explore` and `WhatIsHere` already do. That is not a change to
+  this module's public surface: package `sapedb` exports value types and a
+  client, never `store.Store`. Entries written before this change keep their
+  empty `by` — nothing rewrites the log.
+
+  Measured on both paths, each with a control that fails loudly rather than
+  vacuously: `TestDeclaringOverTheWireGoesIntoTheLogWithAnActor`
+  (`internal/server`), which first proves the log reader can see an actor on an
+  explore entry — one that carried an actor before this change — so that an
+  empty actor on the declaration is the declaration's fault and not the
+  reader's, and `TestApplyRecordsWhoDeclared` (`internal/cli`).
+
 - A key taken from an earlier step was the one value in a declaration whose
   type nobody compared with the place it was used. `check()`
   (`validateOperation`, `internal/store/ops.go`) has always compared an

@@ -49,7 +49,7 @@ func TestABackwardsBoolRangeIsNowRefused(t *testing.T) {
 		From: &Endpoint{Terms: []Term{{Value: true}}},
 		To:   &Endpoint{Terms: []Term{{Value: false}}},
 	}
-	if _, err := store.DeclareOperation(op); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, op); !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("From=true To=false on a bool field: want ErrDeclaration at declare time, got %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestABackwardsBoolRangeIsNowRefused(t *testing.T) {
 		From:  &Endpoint{Terms: []Term{{Arg: "lo"}}},
 		To:    &Endpoint{Terms: []Term{{Arg: "hi"}}},
 	}
-	if _, err := store.DeclareOperation(argOp); err != nil {
+	if _, err := store.DeclareOperation(Caller{}, argOp); err != nil {
 		t.Fatalf("the argument-shaped operation was refused at declare: %v", err)
 	}
 	_, err = store.Invoke(Caller{}, "flags.arg", 0, map[string]any{"lo": true, "hi": false})

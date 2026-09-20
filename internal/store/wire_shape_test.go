@@ -137,7 +137,7 @@ func TestEndpointTermsIsNeverNull(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stored, err := db.DeclareOperation(Operation{
+	stored, err := db.DeclareOperation(Caller{}, Operation{
 		Name:       "articles.by_author.scan",
 		Collection: "articles",
 		Action:     ActionScan,

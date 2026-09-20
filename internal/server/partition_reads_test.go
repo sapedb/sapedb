@@ -124,7 +124,7 @@ func declareSpread(t *testing.T, server *Server, account, name string, documents
 		release()
 		t.Fatal(err)
 	}
-	if _, err := db.DeclareOperation(store.Operation{
+	if _, err := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "spread.get", Collection: "spread", Action: store.ActionGet,
 		Input: []store.Parameter{{Name: "id", Type: store.TypeString, Required: true}},
 		Key:   &store.Term{Arg: "id"},

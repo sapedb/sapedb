@@ -183,7 +183,7 @@ func TestArgDoorCyclicValueNoLongerCrashesThroughSatisfiesItReturnsErrCondition(
 			os.Exit(5)
 		}
 		yes := true
-		if _, err := s.DeclareOperation(Operation{
+		if _, err := s.DeclareOperation(Caller{}, Operation{
 			Name: "widgets.check", Collection: "widgets", Action: ActionBatch,
 			Input: []Parameter{
 				{Name: "id", Type: TypeString, Required: true},
@@ -299,7 +299,7 @@ func TestPutAndDeclareOperationBothRefuseACyclicValueBeforeItCanEverBeStored(t *
 				t.Fatalf("DeclareOperation with a cyclic constant panicked instead of returning an error: %v", r)
 			}
 		}()
-		_, err := store.DeclareOperation(Operation{
+		_, err := store.DeclareOperation(Caller{}, Operation{
 			Name: "widgets.loopy", Collection: "widgets", Action: ActionBatch,
 			Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 			Steps: []Step{{

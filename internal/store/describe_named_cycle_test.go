@@ -52,7 +52,7 @@ func TestDescribeOfANamedSelfReferentialSliceTypeReturnsABoundedStringInsteadOfC
 			os.Exit(5)
 		}
 		yes := true
-		if _, err := s.DeclareOperation(Operation{
+		if _, err := s.DeclareOperation(Caller{}, Operation{
 			Name: "widgets.check", Collection: "widgets", Action: ActionBatch,
 			Input: []Parameter{
 				{Name: "id", Type: TypeString, Required: true},

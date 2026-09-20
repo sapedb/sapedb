@@ -335,7 +335,7 @@ func TestItServesOverTLSAndStopsWhenTold(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DeclareOperation(store.Operation{
+	if _, err := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "notes.add", Collection: "notes", Action: store.ActionInsert,
 		Input:    []store.Parameter{{Name: "body", Type: store.TypeString, Required: true}},
 		Document: map[string]store.Term{"body": {Arg: "body"}},

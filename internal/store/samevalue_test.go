@@ -487,7 +487,7 @@ func TestAConstantConditionMayBeAnArrayAndIsCheckedRatherThanRefused(t *testing.
 	widgets := widgetsForConditions(t, store)
 
 	yes := true
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "widgets.retag_if", Collection: "widgets", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "id", Type: TypeString, Required: true},
@@ -557,7 +557,7 @@ func TestAnArgumentDeclaredAnyCanCarryAnArrayThatNoDeclarationRuleSees(t *testin
 	widgets := widgetsForConditions(t, store)
 
 	yes := true
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "widgets.retag_matching", Collection: "widgets", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "id", Type: TypeString, Required: true},
@@ -656,7 +656,7 @@ func TestAConditionSourcedFromAnEarlierStepIsAlwaysAKeyNeverAnArrayOrObject(t *t
 		}
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "assignments.claim", Collection: "assignments", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "assignment", Type: TypeString, Required: true},
@@ -835,7 +835,7 @@ func TestNumbersAreFloat64OnEveryPathThatFeedsSameValue(t *testing.T) {
 			t.Fatal(err)
 		}
 		yes := true
-		if _, err := store.DeclareOperation(Operation{
+		if _, err := store.DeclareOperation(Caller{}, Operation{
 			Name: "widgets.check_numbers", Collection: "widgets", Action: ActionBatch,
 			Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 			Steps: []Step{{

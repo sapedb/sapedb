@@ -318,7 +318,7 @@ func TestARollupOfAPartitionedCollectionNamesOneGroup(t *testing.T) {
 		t.Errorf("cash across two months is %d and %v, want 2 and 10", count, sum)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "lines.for_account", Collection: "lines", Action: ActionTotals, Rollup: "per_account", Limit: 10,
 		Input: []Parameter{{Name: "account", Type: TypeString, Required: true}},
 		From:  &Endpoint{Terms: []Term{{Arg: "account"}}},
@@ -326,7 +326,7 @@ func TestARollupOfAPartitionedCollectionNamesOneGroup(t *testing.T) {
 	}); err != nil {
 		t.Errorf("reading one group of a partitioned collection: %v", err)
 	}
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "lines.everything", Collection: "lines", Action: ActionTotals, Rollup: "per_account", Limit: 10,
 	}); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("reading every group of a partitioned collection: %v", err)
@@ -611,13 +611,13 @@ func TestARollupReadSaysHowManyRowsItMayReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "lines.all", Collection: "lines", Action: ActionTotals, Rollup: "per_account",
 	}); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a rollup read with no limit: %v", err)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "lines.first_two", Collection: "lines", Action: ActionTotals, Rollup: "per_account", Limit: 2,
 	}); err != nil {
 		t.Fatal(err)

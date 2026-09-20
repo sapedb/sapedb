@@ -426,14 +426,14 @@ func TestADirectionThatCannotBeWorkedOutIsRefusedWhereItIsWritten(t *testing.T) 
 	} {
 		operation := refused.build(eitherWay())
 		operation.Name = "articles.refused"
-		if _, err := store.DeclareOperation(operation); !errors.Is(err, ErrDeclaration) {
+		if _, err := store.DeclareOperation(Caller{}, operation); !errors.Is(err, ErrDeclaration) {
 			t.Errorf("%s: want ErrDeclaration, got %v", refused.why, err)
 		}
 	}
 
 	// A direction on something that does not walk an index is a word nothing
 	// reads, which is how a caller comes to believe a promise nobody made.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name:       "articles.one",
 		Collection: "articles",
 		Action:     ActionGet,

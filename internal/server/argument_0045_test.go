@@ -40,7 +40,7 @@ func TestABackwardsRangeReachesTheWireAsArgumentOrDeclaration(t *testing.T) {
 
 	// Declare time: both ends constants, "z" after "a" — refused before the
 	// operation exists at all, so there is no name to invoke.
-	_, declareErr := db.DeclareOperation(store.Operation{
+	_, declareErr := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "people.backwards_constant", Collection: "people", Action: store.ActionScan, Index: "by_name", Limit: 10,
 		From: &store.Endpoint{Terms: []store.Term{{Value: "z"}}},
 		To:   &store.Endpoint{Terms: []store.Term{{Value: "a"}}},
@@ -53,7 +53,7 @@ func TestABackwardsRangeReachesTheWireAsArgumentOrDeclaration(t *testing.T) {
 	}
 
 	// Call time: the same shape reached through arguments.
-	stored, err := db.DeclareOperation(store.Operation{
+	stored, err := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "people.range", Collection: "people", Action: store.ActionScan, Index: "by_name", Limit: 10,
 		Input: []store.Parameter{
 			{Name: "lo", Type: store.TypeString, Required: true},

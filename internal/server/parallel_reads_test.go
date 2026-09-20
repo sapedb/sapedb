@@ -64,7 +64,7 @@ func loadRows(t *testing.T, server *Server, account, name string, documents int)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.DeclareOperation(store.Operation{
+	if _, err := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "rows.count", Collection: "rows", Action: store.ActionCount,
 		// A count declares how far it walks, like any other declaration; this
 		// one is above the number of documents the test writes, so the count

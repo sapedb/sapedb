@@ -254,7 +254,7 @@ func TestClientWrapperForwardsWithoutDroppingFields(t *testing.T) {
 		release()
 		t.Fatal(err)
 	}
-	if _, err := db.DeclareOperation(store.Operation{
+	if _, err := db.DeclareOperation(store.Caller{}, store.Operation{
 		Name: "articles.add", Collection: "articles", Action: store.ActionInsert,
 		Input: []store.Parameter{
 			{Name: "title", Type: store.TypeString, Required: true},

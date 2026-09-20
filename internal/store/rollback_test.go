@@ -71,7 +71,7 @@ func TestRollbackLeavesNothingOfTheTransaction(t *testing.T) {
 	if _, err := store.Declare(Spec{Name: "notes", Key: Key{Path: "id", Type: TypeString, Auto: "ulid"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeclareOperation(byAuthor()); err != nil {
+	if _, err := store.DeclareOperation(Caller{}, byAuthor()); err != nil {
 		t.Fatal(err)
 	}
 

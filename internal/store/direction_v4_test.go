@@ -278,7 +278,7 @@ func TestAnArrayConstantAtAScanBoundIsRefusedRatherThanPanicking(t *testing.T) {
 		To:         &Endpoint{Terms: []Term{{Value: []any{"a", "b"}}}},
 		Limit:      10,
 	}
-	if _, err := store.DeclareOperation(array); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, array); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("an array constant at a scan bound (both ends equal): want ErrDeclaration, got %v", err)
 	}
 
@@ -286,7 +286,7 @@ func TestAnArrayConstantAtAScanBoundIsRefusedRatherThanPanicking(t *testing.T) {
 	object.Name = "widgets.by_object"
 	object.From = &Endpoint{Terms: []Term{{Value: map[string]any{"k": "v"}}}}
 	object.To = &Endpoint{Terms: []Term{{Value: map[string]any{"k": "v"}}}}
-	if _, err := store.DeclareOperation(object); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, object); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a map constant at a scan bound: want ErrDeclaration, got %v", err)
 	}
 
@@ -365,7 +365,7 @@ func TestScanAcrossTellsTwoConstantsApart(t *testing.T) {
 		To:         &Endpoint{Terms: []Term{{Value: "zinc"}}},
 		Limit:      10,
 	}
-	if _, err := store.DeclareOperation(differing); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, differing); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("two different constants ranging over a partitioned index: want ErrDeclaration, got %v", err)
 	}
 }
@@ -393,7 +393,7 @@ func TestTotalsAcrossTellsTwoConstantsApart(t *testing.T) {
 		From: &Endpoint{Terms: []Term{{Value: "cash"}}},
 		To:   &Endpoint{Terms: []Term{{Value: "zinc"}}},
 	}
-	if _, err := store.DeclareOperation(differing); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, differing); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("two different constant groups ranging over a partitioned rollup: want ErrDeclaration, got %v", err)
 	}
 }

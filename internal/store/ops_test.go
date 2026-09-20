@@ -24,7 +24,7 @@ func declared(t *testing.T, seed int64) (*Store, *Collection) {
 
 func declareOp(t *testing.T, store *Store, operation Operation) Operation {
 	t.Helper()
-	stored, err := store.DeclareOperation(operation)
+	stored, err := store.DeclareOperation(Caller{}, operation)
 	if err != nil {
 		t.Fatalf("declare %q: %v", operation.Name, err)
 	}
@@ -119,7 +119,7 @@ func TestALimitIsWhatTheOperationCosts(t *testing.T) {
 	unbounded := byAuthor()
 	unbounded.Name = "articles.unbounded"
 	unbounded.Limit = 0
-	if _, err := store.DeclareOperation(unbounded); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, unbounded); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("want ErrDeclaration, got %v", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestADeclarationIsCheckedWhenItIsMadeNotWhenItRuns(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			operation := broken(byAuthor())
 			operation.Name = "articles.broken"
-			if _, err := store.DeclareOperation(operation); err == nil {
+			if _, err := store.DeclareOperation(Caller{}, operation); err == nil {
 				t.Error("the declaration was accepted")
 			}
 		})

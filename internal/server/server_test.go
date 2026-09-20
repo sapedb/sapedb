@@ -95,7 +95,7 @@ func declare(t *testing.T, server *Server, account, name string) {
 			Limit: 10,
 		},
 	} {
-		if _, err := db.DeclareOperation(operation); err != nil {
+		if _, err := db.DeclareOperation(store.Caller{}, operation); err != nil {
 			t.Fatalf("declare %q: %v", operation.Name, err)
 		}
 	}

@@ -272,8 +272,8 @@ var commands = []command{
 		name:  "apply",
 		opens: true,
 		check: checkApply,
-		run: func(_ options, db *store.Store, args []string, _ io.Reader, out io.Writer) error {
-			return apply(db, args, out)
+		run: func(opts options, db *store.Store, args []string, _ io.Reader, out io.Writer) error {
+			return apply(db, args, out, store.Caller{Actor: opts.account + " (apply)"})
 		},
 	},
 	{
@@ -677,7 +677,14 @@ type schema struct {
 // declaration has not changed is not given a new version. That is what makes
 // this safe to run on every deploy, which is the only way it will actually be
 // run.
-func apply(db *store.Store, files []string, out io.Writer) error {
+// by is what the change log records against every operation this run
+// declares. It is the account the command was pointed at, and it is a label
+// rather than a proof: running apply means holding the database file's
+// exclusive lock, and anybody who can do that could have written the same
+// bytes by hand. It is still the best name available at this point, and the
+// alternative — the empty actor this path recorded until now — is not a
+// smaller claim, it is no claim at all.
+func apply(db *store.Store, files []string, out io.Writer, by store.Caller) error {
 	if len(files) == 0 {
 		return fmt.Errorf("%w: apply needs a file", ErrUsage)
 	}
@@ -722,7 +729,7 @@ func apply(db *store.Store, files []string, out io.Writer) error {
 				continue
 			}
 
-			stored, err := db.DeclareOperation(operation)
+			stored, err := db.DeclareOperation(by, operation)
 			if err != nil {
 				return fmt.Errorf("%s: operation %q: %w", name, operation.Name, err)
 			}

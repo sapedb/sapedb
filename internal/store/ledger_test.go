@@ -127,7 +127,7 @@ func ledger(t *testing.T, store *Store) {
 			},
 		},
 	} {
-		if _, err := store.DeclareOperation(operation); err != nil {
+		if _, err := store.DeclareOperation(Caller{}, operation); err != nil {
 			t.Fatalf("declare %q: %v", operation.Name, err)
 		}
 	}
@@ -288,7 +288,7 @@ func TestAFailedStepLeavesNoneOfTheEarlierOnes(t *testing.T) {
 	// An operation whose last step cannot work: it writes a payment, then
 	// tries to insert a ledger line under a key that is already taken.
 	yes := true
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.pay_broken", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "order", Type: TypeString, Required: true},
@@ -436,7 +436,7 @@ func TestWhatAStepInsistsOn(t *testing.T) {
 	ledger(t, store)
 
 	yes, no := true, false
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.checks", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "order", Type: TypeString, Required: true},
@@ -452,14 +452,14 @@ func TestWhatAStepInsistsOn(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.must_be_new", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{Action: ActionUpdate, Collection: "orders", Key: &Term{Arg: "order"}, Exists: &no, Set: map[string]Term{"seen": {Value: true}}}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.unpaid", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{
@@ -534,7 +534,7 @@ func TestANumberEqualsTheSameNumberHoweverItWasWritten(t *testing.T) {
 	_, store := fresh(t, 85)
 	ledger(t, store)
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.worth", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{
@@ -560,7 +560,7 @@ func TestANumberEqualsTheSameNumberHoweverItWasWritten(t *testing.T) {
 	// The declared constant above came back through JSON as a float, so that
 	// path alone proves less than it looks. An argument from a caller inside
 	// this process does not: it arrives as whatever Go type was passed.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.worth_arg", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "order", Type: TypeString, Required: true},
@@ -675,7 +675,7 @@ func TestAStepCanOnlyUseWhatCameBeforeIt(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := store.DeclareOperation(Operation{
+			if _, err := store.DeclareOperation(Caller{}, Operation{
 				Name: "broken", Collection: "payments", Action: ActionBatch, Steps: steps,
 			}); !errors.Is(err, ErrDeclaration) {
 				t.Errorf("want ErrDeclaration, got %v", err)
@@ -684,7 +684,7 @@ func TestAStepCanOnlyUseWhatCameBeforeIt(t *testing.T) {
 	}
 
 	// And one that is properly ordered is accepted.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "fine", Collection: "payments", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{
@@ -702,7 +702,7 @@ func TestAnInsertInsideABatchWillNotWriteOverADocument(t *testing.T) {
 	_, store := fresh(t, 88)
 	ledger(t, store)
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "entries.post", Collection: "entries", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "id", Type: TypeString, Required: true},
@@ -757,7 +757,7 @@ func TestNothingIsTrueOfADocumentThatIsNotThere(t *testing.T) {
 	_, store := fresh(t, 90)
 	ledger(t, store)
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.cancel", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{
@@ -808,7 +808,7 @@ func TestAFieldSetToNothingIsNotAFieldThatIsNotThere(t *testing.T) {
 	_, store := fresh(t, 91)
 	ledger(t, store)
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.reship", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{
@@ -819,7 +819,7 @@ func TestAFieldSetToNothingIsNotAFieldThatIsNotThere(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "orders.clear_courier", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "order", Type: TypeString, Required: true}},
 		Steps: []Step{{

@@ -255,14 +255,14 @@ func TestWhatMayBeDeclaredOnAPartitionedCollection(t *testing.T) {
 	_ = entries
 
 	// A scan along the key is always fine: partition order is key order.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "entries.recent", Collection: "entries", Action: ActionScan, Limit: 10,
 	}); err != nil {
 		t.Errorf("a scan along the key of a time-partitioned collection: %v", err)
 	}
 
 	// A scan on a declared index must fix its fields and let only the key vary.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "entries.of_account", Collection: "entries", Action: ActionScan, Index: "by_account", Limit: 10,
 		Input: []Parameter{{Name: "account", Type: TypeString, Required: true}},
 		From:  &Endpoint{Terms: []Term{{Arg: "account"}}},
@@ -283,7 +283,7 @@ func TestWhatMayBeDeclaredOnAPartitionedCollection(t *testing.T) {
 			To:    &Endpoint{Terms: []Term{{Arg: "b"}}},
 		},
 	} {
-		if _, err := store.DeclareOperation(loose); !errors.Is(err, ErrDeclaration) {
+		if _, err := store.DeclareOperation(Caller{}, loose); !errors.Is(err, ErrDeclaration) {
 			t.Errorf("%q was accepted: %v", loose.Name, err)
 		}
 	}
@@ -306,14 +306,14 @@ func TestAHashPartitionedCollectionIsReadByKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "sessions.get", Collection: "sessions", Action: ActionGet,
 		Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 		Key:   &Term{Arg: "id"},
 	}); err != nil {
 		t.Errorf("reading a hash-partitioned collection by key: %v", err)
 	}
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "sessions.all", Collection: "sessions", Action: ActionScan, Limit: 10,
 	}); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("scanning a hash-partitioned collection: %v", err)

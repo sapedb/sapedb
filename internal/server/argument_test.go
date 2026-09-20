@@ -59,7 +59,7 @@ func widgetsScanOps(t *testing.T, server *Server, account, name string) {
 			Input: []store.Parameter{{Name: "t", Type: store.TypeAny, Required: true}},
 			From:  one.from, To: one.to, Limit: 10,
 		}
-		if _, err := db.DeclareOperation(operation); err != nil {
+		if _, err := db.DeclareOperation(store.Caller{}, operation); err != nil {
 			t.Fatalf("declare %q: %v", one.name, err)
 		}
 	}

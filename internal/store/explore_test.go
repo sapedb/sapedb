@@ -69,7 +69,7 @@ func TestWhatWasTypedComesBackAsSomethingToDeclare(t *testing.T) {
 
 	// Now declare the draft and run it. Same rows, or the shell lied.
 	drafted.Name = "books.on_a_shelf_since"
-	if _, err := store.DeclareOperation(drafted); err != nil {
+	if _, err := store.DeclareOperation(Caller{}, drafted); err != nil {
 		t.Fatalf("the shell handed back something that will not declare: %v", err)
 	}
 	if err := store.Commit(); err != nil {

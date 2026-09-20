@@ -280,7 +280,7 @@ func applying(t *testing.T, srv *server.Server, operation store.Operation) error
 	}
 	defer release()
 
-	applyErr := apply(db, []string{path}, io.Discard)
+	applyErr := apply(db, []string{path}, io.Discard, store.Caller{Actor: "acme (apply)"})
 	if applyErr != nil {
 		// apply validates before it writes, so the ordinary refusal leaves
 		// nothing behind — but a refusal that did leave half a transaction
@@ -358,4 +358,73 @@ func pairedServer(t *testing.T) (*wire.Client, *server.Server) {
 		t.Fatal(err)
 	}
 	return client, srv
+}
+
+// TestApplyRecordsWhoDeclared is the `apply` half of the attribution the
+// Declare frame's own test measures over the wire.
+//
+// `sapedb apply` is the older of the two paths into store.DeclareOperation and
+// it recorded nobody for exactly as long as the wire path did. It is measured
+// separately rather than trusted, because the two paths pass their caller in
+// from different places — the server builds one from the connection it
+// verified, apply builds one from the account named on the command line — and
+// only one of those can be checked by testing the other.
+//
+// What the name is worth is not the same on the two paths, and this test does
+// not pretend otherwise: running apply means holding the database file's
+// exclusive lock, so the account here is a label rather than a proof. A label
+// is still the difference between an audit trail and a blank.
+func TestApplyRecordsWhoDeclared(t *testing.T) {
+	_, srv := pairedServer(t)
+
+	operation := store.Operation{
+		Name: "notes.applied", Collection: "notes", Action: store.ActionScan,
+		Index: "by_author", Limit: 10,
+	}
+	if err := applying(t, srv, operation); err != nil {
+		t.Fatalf("apply refused a declaration it must accept: %v", err)
+	}
+
+	db, release, err := srv.Store("acme", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	entries, declarations := 0, 0
+	found := false
+	if err := db.Changes(0, func(change store.Change) bool {
+		entries++
+		if change.Kind != store.ChangeOperation {
+			return true
+		}
+		declarations++
+		if change.Operation == nil || change.Operation.Name != operation.Name {
+			return true
+		}
+		found = true
+		if change.By.Actor != "acme (apply)" {
+			t.Errorf("an operation declared by apply is logged against actor %q, want %q",
+				change.By.Actor, "acme (apply)")
+		}
+		if change.By.Operation != "declare" {
+			t.Errorf("an operation declared by apply is logged under %q, want %q",
+				change.By.Operation, "declare")
+		}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A walk that found nothing is a broken measurement, not an empty result:
+	// without these three, every assertion above is one that never ran.
+	if entries == 0 {
+		t.Fatal("the change log walk found no entries at all after an apply that succeeded")
+	}
+	if declarations == 0 {
+		t.Fatal("the change log holds no operation entries after an apply that declared one")
+	}
+	if !found {
+		t.Fatalf("no operation entry for %q among the %d in the log", operation.Name, declarations)
+	}
 }

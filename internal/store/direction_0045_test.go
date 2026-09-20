@@ -155,7 +155,7 @@ func TestABackwardsRangeIsNeverSilentlyEmpty(t *testing.T) {
 						operation.Direction = &Term{Arg: "direction"}
 					}
 
-					stored, err := store.DeclareOperation(operation)
+					stored, err := store.DeclareOperation(Caller{}, operation)
 
 					if id.wantAtDeclare != nil {
 						if !errors.Is(err, id.wantAtDeclare) {
@@ -225,7 +225,7 @@ func TestBothEndsExclusiveAtOnePointIsRefused(t *testing.T) {
 	fill(t, collection)
 
 	t.Run("both ends constants", func(t *testing.T) {
-		_, err := store.DeclareOperation(Operation{
+		_, err := store.DeclareOperation(Caller{}, Operation{
 			Name: "articles.pinch_constant", Collection: "articles", Action: ActionScan, Index: "by_slug", Limit: 10,
 			From: &Endpoint{Terms: []Term{{Value: "s3"}}, Exclusive: true},
 			To:   &Endpoint{Terms: []Term{{Value: "s3"}}, Exclusive: true},
@@ -395,7 +395,7 @@ func TestATotalsInheritsTheSameRefusal(t *testing.T) {
 	}
 
 	// Declare time: both ends constants, backwards.
-	if _, err := store.DeclareOperation(Operation{
+	if _, err := store.DeclareOperation(Caller{}, Operation{
 		Name: "lines.backwards_constant", Collection: "lines", Action: ActionTotals, Rollup: "per_account", Limit: 10,
 		From: &Endpoint{Terms: []Term{{Value: "d"}}},
 		To:   &Endpoint{Terms: []Term{{Value: "b"}}},

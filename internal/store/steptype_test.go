@@ -58,7 +58,7 @@ func keyedTwoWays(t *testing.T) *Store {
 func TestAnArgumentOfTheWrongTypeForAKeyIsRefusedAtDeclareTime(t *testing.T) {
 	s := keyedTwoWays(t)
 
-	_, err := s.DeclareOperation(Operation{
+	_, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "lines.get", Collection: "lines", Action: ActionGet,
 		Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 		Key:   &Term{Arg: "id"},
@@ -74,7 +74,7 @@ func TestAnArgumentOfTheWrongTypeForAKeyIsRefusedAtDeclareTime(t *testing.T) {
 func TestAKeyOfTheRightTypeFlowsFromOneStepToTheNextAndRuns(t *testing.T) {
 	s := keyedTwoWays(t)
 
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "orders.place", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "who", Type: TypeString, Required: true}},
 		Steps: []Step{
@@ -120,7 +120,7 @@ func TestAKeyOfTheWrongTypeTakenFromAnEarlierStepIsRefusedAtDeclareTime(t *testi
 	// "lines" is keyed by number; "order" produces a string. Before this was
 	// closed, this declaration was accepted and every call to it wrote a line
 	// under a key that sorts nowhere near where a number would.
-	_, err := s.DeclareOperation(Operation{
+	_, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "orders.place_line", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "who", Type: TypeString, Required: true}},
 		Steps: []Step{
@@ -154,7 +154,7 @@ func TestAStepsKeyUsedAsAConditionValueIsStillAcceptedWhateverItsType(t *testing
 	// A Require condition wants TypeAny, so any key fits it — this is the
 	// case the new check must NOT refuse, and it is here so that the rule is
 	// "compare the types" rather than "refuse step keys".
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "orders.place_checked", Collection: "orders", Action: ActionBatch,
 		Input: []Parameter{{Name: "who", Type: TypeString, Required: true}},
 		Steps: []Step{

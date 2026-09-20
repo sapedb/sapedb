@@ -192,7 +192,7 @@ func TestScanAcrossRefusesTwoDifferentArguments(t *testing.T) {
 		To:    &Endpoint{Terms: []Term{{Arg: "b"}}},
 		Limit: 10,
 	}
-	if _, err := store.DeclareOperation(twoArgs); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, twoArgs); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("From arg %q and To arg %q on a partitioned index: want ErrDeclaration, got %v", "a", "b", err)
 	}
 
@@ -227,7 +227,7 @@ func TestTotalsAcrossRefusesTwoDifferentArguments(t *testing.T) {
 		From: &Endpoint{Terms: []Term{{Arg: "a"}}},
 		To:   &Endpoint{Terms: []Term{{Arg: "b"}}},
 	}
-	if _, err := store.DeclareOperation(twoArgs); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, twoArgs); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("From arg %q and To arg %q on a partitioned rollup: want ErrDeclaration, got %v", "a", "b", err)
 	}
 

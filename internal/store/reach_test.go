@@ -414,7 +414,7 @@ func declareReach(store *Store, name, index string, shape reachShape) error {
 	if shape.to.written() {
 		operation.To = &Endpoint{Terms: []Term{shape.to.term()}, Exclusive: shape.to.exclusive}
 	}
-	_, err := store.DeclareOperation(operation)
+	_, err := store.DeclareOperation(Caller{}, operation)
 	return err
 }
 
@@ -608,7 +608,7 @@ func TestAHalfPinnedPartitionedIndexScanIsStillRefusedByScanAcrossItself(t *test
 		Direction:  &Term{Arg: "direction"},
 		Limit:      10,
 	}
-	if _, err := store.DeclareOperation(pinned); err != nil {
+	if _, err := store.DeclareOperation(Caller{}, pinned); err != nil {
 		t.Fatalf("one account read either way should still be declarable: %v", err)
 	}
 
@@ -620,12 +620,12 @@ func TestAHalfPinnedPartitionedIndexScanIsStillRefusedByScanAcrossItself(t *test
 	half.Name = "entries.half"
 	half.To = &Endpoint{Terms: []Term{{Arg: "edge"}}}
 	half.Input = append([]Parameter{{Name: "edge", Type: TypeString, Required: true}}, half.Input...)
-	if _, err := store.DeclareOperation(half); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, half); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a half-pinned partitioned scan, direction an argument: want ErrDeclaration, got %v", err)
 	}
 	half.Direction = &Term{Value: DirectionForward}
 	half.Name = "entries.half_fixed"
-	if _, err := store.DeclareOperation(half); !errors.Is(err, ErrDeclaration) {
+	if _, err := store.DeclareOperation(Caller{}, half); !errors.Is(err, ErrDeclaration) {
 		t.Errorf("a half-pinned partitioned scan, direction fixed: want ErrDeclaration, got %v", err)
 	}
 }

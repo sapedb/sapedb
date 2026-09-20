@@ -70,7 +70,7 @@ func composed(t *testing.T) *Store {
 		},
 	}
 	for _, operation := range flat {
-		if _, err := s.DeclareOperation(operation); err != nil {
+		if _, err := s.DeclareOperation(Caller{}, operation); err != nil {
 			t.Fatalf("declare %s: %v", operation.Name, err)
 		}
 	}
@@ -116,7 +116,7 @@ func TestAComposedOperationReturnsAPageAndItsTrueTotalFromOneCall(t *testing.T) 
 	stock(t, s, "a", 4)
 	stock(t, s, "b", 2)
 
-	if _, err := s.DeclareOperation(page()); err != nil {
+	if _, err := s.DeclareOperation(Caller{}, page()); err != nil {
 		t.Fatalf("declaring catalog.page: %v", err)
 	}
 	if err := s.Commit(); err != nil {
@@ -174,7 +174,7 @@ func TestAComposedOperationReturnsAPageAndItsTrueTotalFromOneCall(t *testing.T) 
 func TestAStepThatTakesAValueFromAManyRowStepIsRefused(t *testing.T) {
 	s := composed(t)
 
-	_, err := s.DeclareOperation(Operation{
+	_, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "catalog.walk", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{{Name: "shelf", Type: TypeString, Required: true}},
 		Limit: 60,
@@ -216,7 +216,7 @@ func TestAStepThatTakesAKeyFromAManyRowBatchStepIsRefused(t *testing.T) {
 	s := composed(t)
 
 	// A batch of two gets: ceiling 2, and it leaves its last get's key behind.
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "items.two_of", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "a", Type: TypeString, Required: true},
@@ -236,7 +236,7 @@ func TestAStepThatTakesAKeyFromAManyRowBatchStepIsRefused(t *testing.T) {
 	// The control, on the same path and before the refusal: a one-row leg with
 	// a key IS allowed to hand it on. If this stops being true the refusal
 	// below stops meaning anything.
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "catalog.one_then_read", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{{Name: "a", Type: TypeString, Required: true}},
 		Limit: 10,
@@ -249,7 +249,7 @@ func TestAStepThatTakesAKeyFromAManyRowBatchStepIsRefused(t *testing.T) {
 		t.Fatalf("a one-row leg handing its key on was refused, so nothing below is a measurement of the ceiling rule: %v", err)
 	}
 
-	_, err := s.DeclareOperation(Operation{
+	_, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "catalog.two_then_read", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "a", Type: TypeString, Required: true},
@@ -285,7 +285,7 @@ func TestAFailedConditionTakesTheWholeTransactionRatherThanSkippingAStep(t *test
 	}
 	id := first.Rows[0]["id"]
 
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "items.touch_then_check", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 		Steps: []Step{
@@ -329,7 +329,7 @@ func TestAConditionPathIsAFieldNameAndNotACalculation(t *testing.T) {
 	first, _ := s.Invoke(Caller{}, "items.on_shelf", 0, map[string]any{"shelf": "a"})
 	id := first.Rows[0]["id"]
 
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "items.arith", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{{Name: "id", Type: TypeString, Required: true}},
 		Steps: []Step{{
@@ -380,7 +380,7 @@ func TestAKeyFromAOneRowStepMayBePassedToTheNextComposedStep(t *testing.T) {
 	s := composed(t)
 
 	// A batch of one write: ceiling 1, and it leaves a key behind.
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "items.add_one", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "shelf", Type: TypeString, Required: true},
@@ -394,7 +394,7 @@ func TestAKeyFromAOneRowStepMayBePassedToTheNextComposedStep(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "catalog.add_and_read", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "shelf", Type: TypeString, Required: true},
@@ -463,7 +463,7 @@ func TestTheCeilingOfAComposedOperationAtAnyDepthIsTheLimitItDeclares(t *testing
 		{"tower.3", "tower.2", 400},
 	}
 	for _, level := range tower {
-		if _, err := s.DeclareOperation(Operation{
+		if _, err := s.DeclareOperation(Caller{}, Operation{
 			Name: level.name, Collection: "items", Action: ActionBatch,
 			Input: []Parameter{{Name: "shelf", Type: TypeString, Required: true}},
 			Limit: level.limit,
@@ -531,7 +531,7 @@ func TestAComposedOperationWhoseLegsOutgrowItsLimitIsRefused(t *testing.T) {
 	over.Name = "catalog.page_too_small"
 	over.Limit = 50 // the scan alone may return 50, and the totals is one more
 
-	_, err := s.DeclareOperation(over)
+	_, err := s.DeclareOperation(Caller{}, over)
 	if !errors.Is(err, ErrDeclaration) {
 		// Say what was lost, not only that a refusal did not arrive: the
 		// number the declaration prints has stopped being the ceiling, which
@@ -553,7 +553,7 @@ func TestAComposedOperationWhoseLegsOutgrowItsLimitIsRefused(t *testing.T) {
 	fits := page()
 	fits.Name = "catalog.page_just_right"
 	fits.Limit = 51
-	if _, err := s.DeclareOperation(fits); err != nil {
+	if _, err := s.DeclareOperation(Caller{}, fits); err != nil {
 		t.Fatalf("legs adding up to exactly the declared limit were refused: %v", err)
 	}
 }
@@ -565,7 +565,7 @@ func TestAComposedOperationThatDeclaresNoLimitIsRefused(t *testing.T) {
 	silent.Name = "catalog.page_silent"
 	silent.Limit = 0
 
-	_, err := s.DeclareOperation(silent)
+	_, err := s.DeclareOperation(Caller{}, silent)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("a composed operation with no declared limit was accepted: %v", err)
 	}
@@ -591,7 +591,7 @@ func TestRedeclaringACalleeDoesNotMoveTheCeilingOfWhatAlreadyCallsIt(t *testing.
 	s := composed(t)
 	stock(t, s, "a", 60)
 
-	if _, err := s.DeclareOperation(page()); err != nil {
+	if _, err := s.DeclareOperation(Caller{}, page()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Commit(); err != nil {
@@ -631,7 +631,7 @@ func TestRedeclaringACalleeDoesNotMoveTheCeilingOfWhatAlreadyCallsIt(t *testing.
 		To:    &Endpoint{Terms: []Term{{Arg: "shelf"}}},
 		Limit: 5000,
 	}
-	stored, err := s.DeclareOperation(wider)
+	stored, err := s.DeclareOperation(Caller{}, wider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,7 @@ func TestAStepMustPinTheVersionOfTheOperationItCalls(t *testing.T) {
 	loose.Name = "catalog.page_loose"
 	loose.Steps[0].Version = 0
 
-	_, err := s.DeclareOperation(loose)
+	_, err := s.DeclareOperation(Caller{}, loose)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("an unpinned reference was accepted: %v", err)
 	}
@@ -695,7 +695,7 @@ func TestAStepMustPinTheVersionOfTheOperationItCalls(t *testing.T) {
 	missing.Name = "catalog.page_missing"
 	missing.Steps[0].Version = 9
 
-	_, err = s.DeclareOperation(missing)
+	_, err = s.DeclareOperation(Caller{}, missing)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("a reference to a version that does not exist was accepted: %v", err)
 	}
@@ -718,7 +718,7 @@ func TestACountMayNotBeAStepOfAComposedOperation(t *testing.T) {
 		With: map[string]Term{"shelf": {Arg: "shelf"}},
 	}
 
-	_, err := s.DeclareOperation(counting)
+	_, err := s.DeclareOperation(Caller{}, counting)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("a count as a leg was accepted, and its number has nowhere to go: %v", err)
 	}
@@ -735,7 +735,7 @@ func TestAStepIsEitherACollectionOrAnOperationAndNeverBoth(t *testing.T) {
 	both.Steps[0].Action = ActionGet
 	both.Steps[0].Collection = "items"
 
-	_, err := s.DeclareOperation(both)
+	_, err := s.DeclareOperation(Caller{}, both)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("a step that both calls and touches was accepted: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestTheArgumentsOfACalledOperationAreCheckedAgainstItsOwnDeclaration(t *tes
 			wrong.Name = "catalog.page_" + strings.ReplaceAll(bad.name, " ", "_")
 			wrong.Steps[0].With = bad.with
 
-			_, err := s.DeclareOperation(wrong)
+			_, err := s.DeclareOperation(Caller{}, wrong)
 			if !errors.Is(err, ErrDeclaration) {
 				t.Fatalf("accepted: %v", err)
 			}
@@ -784,7 +784,7 @@ func TestAComposedOperationAsksForEveryScopeTheOperationsItCallsAskFor(t *testin
 		To:    &Endpoint{Terms: []Term{{Arg: "shelf"}}},
 		Limit: 5, Scopes: []string{"catalog:read"},
 	}
-	if _, err := s.DeclareOperation(guarded); err != nil {
+	if _, err := s.DeclareOperation(Caller{}, guarded); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Commit(); err != nil {
@@ -801,7 +801,7 @@ func TestAComposedOperationAsksForEveryScopeTheOperationsItCallsAskFor(t *testin
 		}},
 	}
 
-	_, err := s.DeclareOperation(calling)
+	_, err := s.DeclareOperation(Caller{}, calling)
 	if !errors.Is(err, ErrDeclaration) {
 		t.Fatalf("an operation that calls a scoped one without asking for the scope was accepted — that is a way round allowed(): %v", err)
 	}
@@ -813,7 +813,7 @@ func TestAComposedOperationAsksForEveryScopeTheOperationsItCallsAskFor(t *testin
 	// does not hold it is refused at call time by the check that already
 	// existed.
 	calling.Scopes = []string{"catalog:read"}
-	if _, err := s.DeclareOperation(calling); err != nil {
+	if _, err := s.DeclareOperation(Caller{}, calling); err != nil {
 		t.Fatalf("asking for the scope its leg asks for was still refused: %v", err)
 	}
 	if err := s.Commit(); err != nil {
@@ -832,7 +832,7 @@ func TestAComposedOperationAsksForEveryScopeTheOperationsItCallsAskFor(t *testin
 func TestAComposedWriteIsOneTransaction(t *testing.T) {
 	s := composed(t)
 
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "items.add_strict", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "id", Type: TypeString, Required: true},
@@ -845,7 +845,7 @@ func TestAComposedWriteIsOneTransaction(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DeclareOperation(Operation{
+	if _, err := s.DeclareOperation(Caller{}, Operation{
 		Name: "catalog.add_two", Collection: "items", Action: ActionBatch,
 		Input: []Parameter{
 			{Name: "one", Type: TypeString, Required: true},
