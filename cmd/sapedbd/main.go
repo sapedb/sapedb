@@ -21,6 +21,13 @@
 // refuses every write of its own — including reading the catalogue and the
 // operator shell, both of which record an entry. See internal/follow.
 //
+// SIGHUP reloads: it re-reads the environment above and applies whatever of
+// it can change without a restart — currently SAPEDB_SHUTDOWN and a rotated
+// SAPEDB_TLS_CERT/SAPEDB_TLS_KEY pair. Everything else it names is refused by
+// name rather than silently kept, on stdout, same as every other line this
+// daemon logs. It is one signal, sent on purpose; nothing here watches a file
+// or retries on its own.
+//
 // There is no logic here on purpose. What this command decides is decided in
 // internal/service, where it can be tested without starting a process.
 package main
@@ -41,7 +48,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	if err := service.Run(ctx, service.Env, os.Stdout); err != nil {
+	// SIGHUP is the explicit, one-at-a-time way to ask a running daemon to
+	// pick up a changed environment — never automatic, never on a timer.
+	reload := make(chan os.Signal, 1)
+	signal.Notify(reload, syscall.SIGHUP)
+	defer signal.Stop(reload)
+
+	if err := service.RunWithReload(ctx, service.Env, os.Stdout, reload); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

@@ -5,6 +5,25 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ## Unreleased
 
+### Added
+
+- **`sapedbd` reloads part of its configuration on SIGHUP, and says exactly
+  what it did (SAPE-7).** `SAPEDB_SHUTDOWN` and a rotated
+  `SAPEDB_TLS_CERT`/`SAPEDB_TLS_KEY` pair take effect without a restart, with
+  no dropped connections. Everything else the environment can set —
+  `SAPEDB_ADDR`, `SAPEDB_DIR`, `SAPEDB_SECRET`, `SAPEDB_LABEL`,
+  `SAPEDB_INSECURE`, `SAPEDB_ENCRYPT`, `SAPEDB_FOLLOW` — is refused by name
+  with a reason, never silently kept: most of it because the secret is
+  checked on every request and also derives the at-rest encryption key, so
+  changing it live would invalidate every open connection and grant at once.
+
+  The reload is all-or-nothing. Every reloadable setting is validated before
+  any of them is touched, so a configuration where one of several changed
+  entries is invalid applies none of them — the running server is left
+  exactly as it was, with the rejected entry and its reason in the report.
+  `internal/service.Service.Reload` and `.ReloadFromEnv` are the entry
+  points; `RunWithReload` wires a signal channel to them for `sapedbd`.
+
 ### Breaking
 
 - **A grant now expires, and the signed message changed shape to say so
