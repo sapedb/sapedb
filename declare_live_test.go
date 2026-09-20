@@ -293,3 +293,120 @@ func goTool(t *testing.T) string {
 	}
 	return found
 }
+
+// TestAnOlderVersionIsStillCallableThroughThePublicPackage is the measurement
+// behind InvokeVersion.
+//
+// The wire has carried a version since before this method existed — the
+// server's `call` struct decodes it, store.Store.Invoke takes it — and nothing
+// on the public surface could set it. So after a redeclaration the older
+// versions were stored, readable and runnable by the engine, and unreachable
+// by anybody holding this package: the declaration was there and there was no
+// way to ask for it.
+//
+// Three calls make that concrete on one live daemon: the unversioned call
+// (which follows the newest declaration wherever it goes), version 1, and
+// version 2, all against the same three documents. If InvokeVersion sent no
+// version, or sent the wrong one, all three answers would be the same — so
+// the three declarations are deliberately given different limits, and the
+// row counts are what tell them apart.
+func TestAnOlderVersionIsStillCallableThroughThePublicPackage(t *testing.T) {
+	dir := t.TempDir()
+	signature := seedTheCollection(t, dir)
+	daemon, address := startDaemon(t, dir)
+
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := Dial(Connection{
+		Account: "acme", Password: wrapperPassword, Host: host, Port: port,
+		DBName: "main", Signature: signature,
+	}, Options{Insecure: true, Timeout: 10 * time.Second, RequestTimeout: 30 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Operate(liveSecret); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Declare(Operation{
+		Name: "notes.add", Collection: "notes", Action: store.ActionInsert,
+		Input: []Parameter{
+			{Name: "body", Type: store.TypeString, Required: true},
+			{Name: "author", Type: store.TypeString, Required: true},
+		},
+		Document: map[string]Term{"body": {Arg: "body"}, "author": {Arg: "author"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"one", "two", "three"} {
+		if _, err := client.Invoke("notes.add", map[string]any{"body": body, "author": "ann"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	scan := func(limit int) Operation {
+		return Operation{
+			Name: "notes.by_author", Collection: "notes", Action: store.ActionScan,
+			Index: "by_author",
+			Input: []Parameter{{Name: "author", Type: store.TypeString, Required: true}},
+			From:  &Endpoint{Terms: []Term{{Arg: "author"}}},
+			To:    &Endpoint{Terms: []Term{{Arg: "author"}}},
+			Limit: limit,
+		}
+	}
+	if got, err := client.Declare(scan(1)); err != nil || got.Version != 1 {
+		t.Fatalf("declaring version 1: %+v %v", got, err)
+	}
+	if got, err := client.Declare(scan(2)); err != nil || got.Version != 2 {
+		t.Fatalf("declaring version 2: %+v %v", got, err)
+	}
+	if got, err := client.Declare(scan(3)); err != nil || got.Version != 3 {
+		t.Fatalf("declaring version 3: %+v %v", got, err)
+	}
+
+	for _, one := range []struct {
+		version int
+		rows    int
+	}{
+		{version: 0, rows: 3}, // the newest, which is what Invoke asks for
+		{version: 1, rows: 1},
+		{version: 2, rows: 2},
+		{version: 3, rows: 3},
+	} {
+		result, err := client.InvokeVersion("notes.by_author", one.version, map[string]any{"author": "ann"})
+		if err != nil {
+			t.Fatalf("InvokeVersion(%d): %v", one.version, err)
+		}
+		if result.Count != one.rows {
+			t.Errorf("InvokeVersion(%d) returned %d rows, want %d", one.version, result.Count, one.rows)
+		}
+		if one.version > 0 && result.Version != one.version {
+			t.Errorf("InvokeVersion(%d) answered from version %d", one.version, result.Version)
+		}
+	}
+
+	// Invoke's own signature is untouched and still means "the newest".
+	newest, err := client.Invoke("notes.by_author", map[string]any{"author": "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newest.Count != 3 || newest.Version != 3 {
+		t.Fatalf("Invoke answered %d rows from version %d, want 3 rows from version 3", newest.Count, newest.Version)
+	}
+
+	// A version nobody declared is refused, not quietly answered from another.
+	if result, err := client.InvokeVersion("notes.by_author", 99, map[string]any{"author": "ann"}); err == nil {
+		t.Fatalf("version 99 was answered instead of refused: %+v", result)
+	}
+
+	if daemon.ProcessState != nil {
+		t.Fatalf("the daemon exited during the test: %v", daemon.ProcessState)
+	}
+}

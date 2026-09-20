@@ -231,7 +231,8 @@ func (c *Client) WhatIsHere() (store.Catalogue, error) {
 // a name that is already declared writes a NEW version and leaves the older
 // ones readable — it does not replace anything — which is why the returned
 // Operation is worth reading rather than discarding: its Version is what
-// names this exact declaration once somebody has declared over the top of it.
+// InvokeVersion needs to keep running this exact declaration once somebody
+// has declared over the top of it.
 //
 // The body key is "operation", which is what the server's own `declaring`
 // struct decodes (internal/server/declare.go).
@@ -260,12 +261,45 @@ func (c *Client) Declare(operation store.Operation) (store.Operation, error) {
 // on every call. Caught by sapedb_test.go's end-to-end wrapper test, the
 // first thing to invoke a declared operation through this client.
 func (c *Client) Invoke(name string, arguments map[string]any) (store.Result, error) {
-	payload, err := c.ask(protocol.Invoke, map[string]any{"command": name, "args": arguments})
+	return c.InvokeVersion(name, 0, arguments)
+}
+
+// InvokeVersion runs one particular version of a declared operation. Version
+// zero is the latest, which is what Invoke asks for.
+//
+// The wire has carried a version since before this method existed — the
+// server's `call` struct decodes it and store.Store.Invoke takes it — and
+// nothing in this client could set it. So a redeclaration (Declare, or
+// `sapedb apply`) left every older version stored, readable, runnable by the
+// engine, and unreachable through this package: the data was there, the
+// declaration was there, and there was no way to ask for it.
+//
+// It is a second method rather than a third parameter on Invoke, because
+// Invoke's signature is part of a surface this repository has already
+// published and taking it back would break every caller for a field almost
+// none of them pass. The two alternatives were both worse: a variadic
+// `version ...int` compiles for `Invoke(name, args, 1, 2, 3)` and reads in
+// the documentation as something it is not, and an options struct means
+// either a second method anyway or the same breaking change with more
+// ceremony. One name on the surface is the honest price.
+func (c *Client) InvokeVersion(name string, version int, arguments map[string]any) (store.Result, error) {
+	body := map[string]any{"command": name, "args": arguments}
+	// Omitted rather than sent as zero, because the field is `omitempty` on
+	// the server's own struct and on the TypeScript client's request body:
+	// sending an explicit 0 where every other client sends nothing is a
+	// difference with no meaning that somebody would one day have to explain.
+	if version > 0 {
+		body["version"] = version
+	}
+	payload, err := c.ask(protocol.Invoke, body)
 	if err != nil {
 		return store.Result{}, err
 	}
 	result := store.Result{}
-	return result, json.Unmarshal(payload, &result)
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return store.Result{}, err
+	}
+	return result, nil
 }
 
 // ask sends a request and returns the payload of a successful answer, turning

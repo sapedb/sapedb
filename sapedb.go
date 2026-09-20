@@ -114,14 +114,25 @@ func (c *Client) WhatIsHere() (Catalogue, error) {
 // Only an operator may: call Operate first, as for Explore. A name that is
 // already declared gets a new version and the older ones stay readable, so the
 // Operation handed back is worth keeping — its Version names this exact
-// declaration after somebody declares over the top of it.
+// declaration after somebody declares over the top of it — see InvokeVersion.
 func (c *Client) Declare(operation Operation) (Operation, error) {
 	return c.inner.Declare(operation)
 }
 
-// Invoke runs a declared operation.
+// Invoke runs a declared operation, at whichever version is newest.
 func (c *Client) Invoke(name string, arguments map[string]any) (Result, error) {
 	return c.inner.Invoke(name, arguments)
+}
+
+// InvokeVersion runs one particular version of a declared operation. Zero
+// means the newest, which is what Invoke asks for.
+//
+// Declaring over a name keeps every older version — so after a redeclaration
+// this is how a caller keeps running the one it was built against, until it
+// has been changed to suit the new one. It is a separate method rather than a
+// parameter on Invoke because Invoke's signature is already published.
+func (c *Client) InvokeVersion(name string, version int, arguments map[string]any) (Result, error) {
+	return c.inner.InvokeVersion(name, version, arguments)
 }
 
 // Close says goodbye and hangs up.

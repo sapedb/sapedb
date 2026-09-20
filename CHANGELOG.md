@@ -52,9 +52,31 @@ recorded, so its absence is not a claim that nothing changed before it.
   at least this side cannot drift from its own fixture in silence.
 
 - `Client.Declare` on the public `sapedb` package and on `internal/wire`'s
-  client. The module-root surface is now 31 names, not 30, and
-  `TestTheSurfaceIsExactlyTheseThirtyNames` is renamed to match the number it
-  guards.
+  client.
+
+- `Client.InvokeVersion(name, version, args)`, on the public `sapedb` package
+  and on `internal/wire`'s client. The wire has carried a version since long
+  before this — `internal/server`'s `call` struct decodes it and
+  `store.Store.Invoke` takes it — and nothing in either client could set one,
+  so every version a redeclaration left behind was stored, readable and
+  runnable by the engine and unreachable by anybody holding the published
+  package. Zero means the newest, which is what `Invoke` asks for; the field
+  is left off the request entirely when it is zero, matching the `omitempty`
+  on the server's struct and on the TypeScript client's request body.
+
+  It is a second method rather than a third parameter, because `Invoke`'s
+  signature is part of the surface published above and taking it back would
+  break every caller for a field almost none of them pass. A variadic
+  `version ...int` would have kept source compatibility and cost more than it
+  saved — `Invoke(name, args, 1, 2, 3)` compiles, and the documentation would
+  read as something the method is not. Measured by
+  `TestAnOlderVersionIsStillCallableThroughThePublicPackage`
+  (`declare_live_test.go`), which declares three versions of one scan on a
+  live daemon and tells them apart by row count.
+
+- The module-root surface is 32 names now, not 30, and
+  `TestTheSurfaceIsExactlyTheseThirtyNames` is renamed twice over to match
+  the number it guards.
 
 - A public Go package, `sapedb` (`github.com/sapedb/sapedb`), at the module
   root: task 0068 §1's answer to "what does a Go client outside this
