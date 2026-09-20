@@ -16,26 +16,40 @@ const goldenSecret = "correct horse battery staple"
 // Every hex string in this file was NOT produced by calling dbkey.Key and
 // copying its answer — that would only prove dbkey.Key agrees with itself.
 // It was produced by a throwaway program (kept outside this repo, in the
-// task's scratchpad) that inlined the exact call internal/cli/cli.go made at
-// this task's base commit (bd3df4d): hkdf.Key(sha256.New, []byte(secret),
-// []byte(account+"/"+db), dbKeyLabel, 32), with dbKeyLabel a literal copy
-// of what is now this package's Label constant (see dbkey.go),
+// task's scratchpad) that inlined the derivation by hand:
+// hkdf.Key(sha256.New, []byte(secret), []byte(account+"/"+db), label, 32),
+// with `label` typed into that program as a literal copy of this package's
+// Label constant (see dbkey.go),
+//
+// These vectors moved once, and this is the only thing that moved them: the
+// rename changed Label's text from the product's old name to "sapedb", so
+// every key derived under it changed too. That is the whole content of the
+// change — the hash, the info string, the argument order and the requested
+// length are all exactly what they were, which is why the five rows below
+// still differ from each other along exactly the same five axes. The vectors
+// were regenerated the same independent way they were first produced, not by
+// pasting what the suite reported as "got"; the two agreed, which is the
+// cross-check worth having and the reason to bother.
+//
+// What this test can no longer claim, and used to: that dbkey.Key agrees
+// with a database file written before the refactor. It does not, on purpose
+// — see Label's own comment. What it still claims is the thing that
+// matters from here on: that the derivation is this arithmetic and not
+// whatever this package's code happens to compute today,
 //
 // run under the same docker image house-rules.md names for Go:
 //
 //	docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src \
 //	  golang:1.24-alpine sh -c "go run main.go"
 //
-// So this pins dbkey.Key to what the two pre-refactor duplicated copies
-// already agreed on producing, not to whatever this package's own code
-// happens to compute today. A refactor that changed the derivation — the
+// A refactor that changed the derivation — the
 // hash, the byte order of the two strings hkdf.Key takes, which one is the
 // info and which is the label, the requested length — would still compile
 // and would still make internal/cli and internal/server agree with each
 // other, because both call this one function. It would not agree with a
 // database file that already exists, and this is the only thing in the
 // suite that would notice.
-func TestKeyMatchesTheGoldenVectorFromBeforeTheRefactor(t *testing.T) {
+func TestKeyMatchesTheGoldenVector(t *testing.T) {
 	key, err := Key(goldenSecret, "acme", "main")
 	if err != nil {
 		t.Fatal(err)
@@ -51,9 +65,9 @@ func TestKeyMatchesTheGoldenVectorFromBeforeTheRefactor(t *testing.T) {
 	// mutation is observable nowhere else in the tree; measured, a prefix-only
 	// comparison here together with a KeyBytes-1 derivation leaves all 14
 	// packages green. This assertion is what stands between that and nothing.
-	const want = "b2fbc36b64c7a4bb11e410d6e1e01d9d5aaed7d004e4df1237a4a7144d8f4004"
+	const want = "2bd666e5f47857529f54ebe0ba5ef22b11c02b34b0fb2c4dd7528edb5bb15a4b"
 	if got := hex.EncodeToString(key); got != want {
-		t.Errorf("Key(%q, %q, %q) = %s, want %s (the value the pre-refactor code produced)",
+		t.Errorf("Key(%q, %q, %q) = %s, want %s (the value the derivation independently produces)",
 			goldenSecret, "acme", "main", got, want)
 	}
 }
@@ -76,22 +90,22 @@ func TestKeyTable(t *testing.T) {
 	}{
 		{
 			name: "base", secret: goldenSecret, account: "acme", db: "main",
-			want: "b2fbc36b64c7a4bb11e410d6e1e01d9d5aaed7d004e4df1237a4a7144d8f4004",
+			want: "2bd666e5f47857529f54ebe0ba5ef22b11c02b34b0fb2c4dd7528edb5bb15a4b",
 		},
 		{
 			// Axis: secret. Account and db held at the base row's values.
 			name: "secret differs", secret: "a different secret entirely", account: "acme", db: "main",
-			want: "8ef9f11e7862f8840a1d224dacfc827fae20e36b6b03d2e1b1d976eaa4628af0",
+			want: "c0a1273ab29066cb17286cf2755322e8848c6ac983d221d2b67df9774aa4f8a9",
 		},
 		{
 			// Axis: account. Secret and db held at the base row's values.
 			name: "account differs", secret: goldenSecret, account: "bravo", db: "main",
-			want: "9ecd7e0819029b8bdcca8b190a56f6c61b89a94067646686c8c4294dcf1cd5c4",
+			want: "ea0011d52d4b19644ea5428b0866ae5014a1010a26ee2149891448f376503e67",
 		},
 		{
 			// Axis: db. Secret and account held at the base row's values.
 			name: "db differs", secret: goldenSecret, account: "acme", db: "other",
-			want: "95a3c255b57d66d4dec81140837129e910b444a27d05c2c4ffe7eff72a78ffa4",
+			want: "ca09d282401ccdaf55614e03ccb660f3928465f0193aa9285c2d9d422fb103ed",
 		},
 		{
 			// Axis: which of account/db lands in which position. Same two
@@ -99,7 +113,7 @@ func TestKeyTable(t *testing.T) {
 			// refactor that flipped the two arguments Key hands to the info
 			// string, which M2 in the task's mutation catalogue plants.
 			name: "account and db swapped", secret: goldenSecret, account: "main", db: "acme",
-			want: "bd9f452ea5853bee135ca99138881703559d791904487e4dad7d664ed4ec4417",
+			want: "97ae203324816b3b37816b174d0c71e6330926428ef465ceb8b0772dcf1713d6",
 		},
 	}
 
@@ -145,13 +159,31 @@ func TestKeyDoesNotDistinguishWhereTheSlashFallsInAccountOrDB(t *testing.T) {
 	}
 
 	// Control: a valid pair is entirely unaffected — same golden vector as
-	// TestKeyMatchesTheGoldenVectorFromBeforeTheRefactor pins on its own.
+	// TestKeyMatchesTheGoldenVector pins on its own.
 	key, err := Key(goldenSecret, "acme", "main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "b2fbc36b64c7a4bb11e410d6e1e01d9d5aaed7d004e4df1237a4a7144d8f4004"
+	const want = "2bd666e5f47857529f54ebe0ba5ef22b11c02b34b0fb2c4dd7528edb5bb15a4b"
 	if got := hex.EncodeToString(key); got != want {
 		t.Errorf("Key(%q, %q, %q) = %s, want %s", goldenSecret, "acme", "main", got, want)
+	}
+}
+
+// TestLabelIsExactlyThis pins Label's text as a literal, deliberately not by
+// comparing the constant to itself.
+//
+// The golden vectors above already fail if Label changes, so this is not the
+// only thing watching it — but they fail by reporting two hex strings, which
+// says the derivation moved without saying which part of it did. This says
+// it in one line. The two together are the difference between "a key changed"
+// and "the label changed", and only one of those is diagnosable at a glance.
+//
+// The :v1 suffix is pinned along with the rest: it marks the derivation
+// scheme, which this rename did not touch.
+func TestLabelIsExactlyThis(t *testing.T) {
+	const want = "sapedb/server:database:v1"
+	if Label != want {
+		t.Errorf("Label is %q, want %q", Label, want)
 	}
 }

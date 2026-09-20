@@ -18,15 +18,20 @@ import (
 	"github.com/sapedb/sapedb/internal/pager"
 )
 
-// Label must not change. It still carries the product's old name on purpose,
-// not by oversight: it is baked into every encrypted database file that
-// already exists, and changing it — without a migration that re-derives and
-// re-encrypts every affected database under the new label — is a silent,
-// unannounced key rotation. The key this package derives would stop matching
-// the key the file was written under, which reads as "wrong secret" for a
-// secret that is right. This constant moving is a migration's job, not a
-// refactor's.
-const Label = "rsql/server:database:v1"
+// Label must not change from here on. It used to carry the product's old
+// name, kept on the argument that changing it is a silent, unannounced key
+// rotation: the key this package derives stops matching the key an existing
+// file was written under, which reads as "wrong secret" for a secret that is
+// right. That argument was true and is now spent — the repository carries no
+// tags at all, so there has never been a release, and no encrypted database
+// written by a build anybody else ran exists to be locked out. This commit
+// is the rename; after 1.0.0 moving this value is a migration's job, not a
+// refactor's, and the argument above applies again in full.
+//
+// The :v1 suffix stays :v1 on purpose. This is not a new version of the
+// derivation scheme — the algorithm, the info string and the key length are
+// untouched — it is the same scheme with the product's current name in it.
+const Label = "sapedb/server:database:v1"
 
 // Key derives the key a database file is encrypted with, from the secret
 // that is the single root of trust and the account/name that names the

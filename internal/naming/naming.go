@@ -184,57 +184,37 @@ type Exception struct {
 // point of writing it down: a new entry shows up in a diff, and a reviewer
 // either agrees with Why or does not.
 //
-// pager.go's Magic is listed for the record even though the scan above never
-// actually matches it — the tag is written as eight separate byte literals,
-// with no four of them adjacent as text. It is a format tag, not a name, and
-// this row says that on purpose rather than by the accident of how Go
-// literals happen to print.
-var Exceptions = []Exception{
-	{
-		File:   "internal/pager/pager.go",
-		Marker: "Magic = [8]byte{'R', 'S', 'Q', 'L'",
-		Why:    "the on-disk format tag; changing it makes every existing file unreadable",
-	},
-	{
-		File:   "internal/pager/crypt.go",
-		Marker: "pageLabel  = ",
-		Why:    "a key-derivation label baked into every encrypted page",
-	},
-	{
-		File:   "internal/pager/crypt.go",
-		Marker: "checkLabel = ",
-		Why:    "a key-derivation label baked into the encryption key-check",
-	},
-	{
-		// The Marker is the whole line, value included, not just the
-		// declaration keyword — on purpose. A prefix-only marker like
-		// "const Label = " would excuse whatever value sits after it, and
-		// this is the one label internal/cli and internal/server both derive
-		// their database key from — see internal/dbkey's own comment. Built
-		// by concatenation, not typed whole, for the same reason target is:
-		// this file's own source must not spell the old name out
-		// contiguously.
-		//
-		// There used to be two rows here, one for internal/cli/cli.go and one
-		// for internal/server/server.go, because each package carried its own
-		// copy of this label and its own hkdf.Key call. Task 0047 collapsed
-		// both onto internal/dbkey.Key, so there is now exactly one line in
-		// the whole tree that can carry this value, and exactly one row here
-		// to excuse it. A single source can still be edited to a "v2" by
-		// mistake — naming_test.go's
-		// TestAllowedRequiresTheDbKeyLabelValueToMatchNotJustTheKeyword pins
-		// that a marker this specific still refuses it — but it can no longer
-		// drift from a sibling copy, because
-		// there is no longer a sibling copy to drift from.
-		File:   "internal/dbkey/dbkey.go",
-		Marker: "const Label = \"" + target + "/server:database:v1\"",
-		Why:    "the single key-derivation label internal/cli and internal/server both call dbkey.Key with; changing its value silently rotates the key of every encrypted database that already exists",
-	},
-}
+// It is empty, and that is the finished state this package was written to
+// reach — "a rename is done when nothing in the tree can reintroduce the old
+// name without this package noticing", and there is now nothing left to
+// excuse. It held four rows until the rename was completed: the on-disk
+// format tag and three key-derivation labels, each kept on the argument that
+// changing it breaks every database that already exists. That argument was
+// spent the moment it was checked against the repository, which carries no
+// tags at all and so has never released anything for such a database to have
+// been written by.
+//
+// The table and Allowed stay rather than being deleted with their last row,
+// because the next justified exception should arrive as one reviewable line
+// here rather than as a reason to rebuild this machinery under time
+// pressure. allowedIn below is what keeps that machinery measured while the
+// table is empty: the behaviour tests run against a fixture table, so they
+// still fail when Allowed is widened, instead of passing vacuously because
+// there is nothing to widen.
+var Exceptions []Exception
 
 // Allowed reports whether a hit is one this patrol excuses.
-func Allowed(hit Hit) bool {
-	for _, exception := range Exceptions {
+func Allowed(hit Hit) bool { return allowedIn(hit, Exceptions) }
+
+// allowedIn is Allowed against a given table rather than the live one. It
+// exists so the tests that measure what Allowed excuses — that a marker is
+// scoped to its own line and its own file, and that it pins a value rather
+// than a keyword — keep measuring it now that Exceptions is empty. Against
+// the live table those tests would all pass without exercising a single
+// comparison below, which is the one way a patrol goes quiet without anybody
+// editing it.
+func allowedIn(hit Hit, table []Exception) bool {
+	for _, exception := range table {
 		if hit.File == exception.File && strings.Contains(hit.Text, exception.Marker) {
 			return true
 		}

@@ -7,6 +7,50 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Breaking
 
+- **The old product name is gone from the on-disk format and from every
+  encryption key.** Two things that used to spell the product's former name
+  now spell `sapedb`, and both of them decide whether an existing file can be
+  opened at all:
+
+  - the eight-byte format tag at the head of every database file, and
+  - the three key-derivation labels
+    (`sapedb/server:database:v1`, `sapedb/pager:page:v1`,
+    `sapedb/pager:key-check:v1`).
+
+  **Every database file written by any earlier build is unreadable by this
+  one, and there is no migration.** An unencrypted database and an encrypted
+  one fail the same way, at the same place, before any key is tried:
+
+  ```
+  $ sapedb -account acme -db main ls
+  sapedb/pager: not a sapedb file
+  ```
+
+  That is the format tag being checked, and it is deliberately the first
+  thing checked. An encrypted database from an earlier build would otherwise
+  have failed later and far less clearly — with
+  `this database is encrypted and the key does not open it`, about a secret
+  that is in fact correct — because its pages are now keyed under a different
+  label. Measured both ways: with the tag change in place, an old encrypted
+  file is refused as `not a sapedb file`; with only the label change, the
+  same file is refused as a wrong key.
+
+  There is nothing to do about an existing file except recreate it. `dump`
+  and `restore` do not help, because an earlier build is the only thing that
+  can read one, and it cannot write a file this build accepts.
+
+  **Why this is happening now rather than later.** It could only happen
+  before the first release, and it has not happened yet: the repository
+  carries no tags, its remote carries no tags, and this changelog has never
+  had a heading other than `Unreleased`. So no database written by a build
+  anybody else ran exists to be broken by it. From 1.0.0 onwards both the tag
+  and the three labels are frozen, and moving either is a migration's job.
+
+  The lengths and the layout are untouched: the tag is still eight bytes with
+  the same trailing two, the labels keep their `:v1` suffix because the
+  derivation scheme itself did not change, and `Format` is still 1. Only the
+  name inside them moved.
+
 - **A `count` must now declare a `limit`.** A declaration with
   `"action": "count"` and no positive `"limit"` is refused when it is
   declared — through `sapedb apply`, through the `Declare` frame, and

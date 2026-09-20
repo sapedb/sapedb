@@ -50,32 +50,72 @@ func TestTheOldNameIsNowhereOutsideTheExceptionTable(t *testing.T) {
 // row nobody is reviewing against a real line, which is worse than not
 // having it — it reads as documentation of something that no longer exists,
 // or never did.
+//
+// The table is empty today, so this loop is what fails the moment somebody
+// adds a row back without a real hit under it. The pager.go carve-out that
+// used to live here is gone with the row it excused: it existed because
+// Walk never matched the format tag (eight separate byte literals, no four
+// adjacent as text), so that one row could never be confirmed against a hit
+// the way every other row was.
 func TestExceptionTableNamesOnlyRealHits(t *testing.T) {
 	hits, err := Walk(moduleRoot(t))
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
 
-	matched := make(map[int]bool)
 	for i, exception := range Exceptions {
+		matched := false
 		for _, hit := range hits {
 			if hit.File == exception.File && Allowed(hit) {
-				matched[i] = true
+				matched = true
 			}
 		}
-	}
-
-	for i, exception := range Exceptions {
-		// pager.go's Magic row is the one documented exception to this rule:
-		// see its Why. Every other row must correspond to an actual hit.
-		if exception.File == "internal/pager/pager.go" {
-			continue
-		}
-		if !matched[i] {
+		if !matched {
 			t.Errorf("exception %d (%s: %q) matched no hit Walk actually found",
 				i, exception.File, exception.Marker)
 		}
 	}
+}
+
+// TestTheExceptionTableIsEmpty states the finished condition of the rename
+// as a test rather than as a sentence in a comment: there is no line left in
+// this tree that has to be excused.
+//
+// It is deliberately not folded into the test above, which stays green on an
+// empty table by having nothing to iterate. A row added back with a real hit
+// under it would satisfy that one and fail this one, which is the point —
+// re-admitting the old name anywhere should take an argument made in a diff,
+// not just a Marker that happens to match.
+func TestTheExceptionTableIsEmpty(t *testing.T) {
+	for _, exception := range Exceptions {
+		t.Errorf("the old name is excused again at %s (%q): %s",
+			exception.File, exception.Marker, exception.Why)
+	}
+}
+
+// fixtureTable is a stand-in for Exceptions, carrying the rows the real
+// table held before the rename was finished. The tests that measure what
+// Allowed excuses run against this rather than the live table, which is
+// empty: run against an empty table every one of them passes without
+// comparing a single File or Marker, so they would keep passing after
+// Allowed was widened to match on Text alone, or on File alone, or to
+// return true unconditionally. Those are exactly the mutations they exist
+// to catch.
+//
+// The rows are built from target rather than typed out, for the same reason
+// every other fixture in this file is: this file sits inside the tree
+// TestTheOldNameIsNowhereOutsideTheExceptionTable walks for real.
+var fixtureTable = []Exception{
+	{
+		File:   "internal/pager/crypt.go",
+		Marker: "pageLabel  = ",
+		Why:    "a key-derivation label baked into every encrypted page",
+	},
+	{
+		File:   "internal/dbkey/dbkey.go",
+		Marker: "const Label = \"" + target + "/server:database:v1\"",
+		Why:    "the single key-derivation label internal/cli and internal/server both call dbkey.Key with",
+	},
 }
 
 // --- the patrol proving it patrols ---
@@ -194,7 +234,7 @@ func TestAllowedIsScopedToTheExactLineNotTheWholeFile(t *testing.T) {
 		Line: 999,
 		Text: "// an unrelated leftover mentioning " + target + " that is not either derivation label",
 	}
-	if Allowed(sameFileDifferentLine) {
+	if allowedIn(sameFileDifferentLine, fixtureTable) {
 		t.Error("Allowed excused a line that only shares a file with a real exception, not its content")
 	}
 }
@@ -220,7 +260,7 @@ func TestAllowedRefusesAFileNotOnTheTable(t *testing.T) {
 		Line: 1,
 		Text: "const Label = \"" + target + "/server:database:v1\"",
 	}
-	if Allowed(hit) {
+	if allowedIn(hit, fixtureTable) {
 		t.Error("Allowed excused a file that is not in the exception table at all, even though its content matches a real exception's Marker verbatim")
 	}
 }
@@ -244,7 +284,7 @@ func TestAllowedRequiresTheDbKeyLabelValueToMatchNotJustTheKeyword(t *testing.T)
 		Line: 27,
 		Text: "const Label = \"" + target + "/server:database:v1\"",
 	}
-	if !Allowed(matching) {
+	if !allowedIn(matching, fixtureTable) {
 		t.Fatal("Allowed refused the exact line internal/dbkey/dbkey.go's row names")
 	}
 
@@ -253,7 +293,7 @@ func TestAllowedRequiresTheDbKeyLabelValueToMatchNotJustTheKeyword(t *testing.T)
 		Line: 27,
 		Text: "const Label = \"" + target + "/server:database:v2\"",
 	}
-	if Allowed(drifted) {
+	if allowedIn(drifted, fixtureTable) {
 		t.Error("Allowed excused dbkey.Label after its value changed to v2 — a prefix-only marker would miss exactly this, and it is the only copy left, so nothing else in the tree would catch the rotation either")
 	}
 }

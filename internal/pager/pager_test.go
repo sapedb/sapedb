@@ -609,3 +609,67 @@ func TestClosingDoesNotTouchThePageHoldingTheLastCommit(t *testing.T) {
 		t.Errorf("the mark says %+v, and the commit says %+v", marked, committed)
 	}
 }
+
+// TestTheFormatTagIsExactlyThis pins the eight bytes that decide whether a
+// file opens at all, as a literal, deliberately not by comparing Magic to
+// itself.
+//
+// Measured before this test was written: reverting Magic to the tag the
+// product used under its old name left all seventeen packages green. Nothing
+// anywhere in the suite read the value — led_test.go's one mention asserts a
+// written image contains Magic[:], which is true for any eight bytes Magic
+// happens to hold, and readMeta compares a file against the same constant
+// that wrote it, so the two agree no matter what it says. That is the whole
+// reason this test exists: this constant is the one value in the tree that
+// cannot be changed after 1.0.0 without a migration, and it was also the one
+// with nothing watching it.
+//
+// A change here is never a refactor. If this test fails, either a migration
+// is being shipped deliberately and this literal moves with it, or something
+// just made every database file in existence unreadable by accident.
+func TestTheFormatTagIsExactlyThis(t *testing.T) {
+	want := [8]byte{'S', 'A', 'P', 'E', 'D', 'B', 0, 1}
+	if Magic != want {
+		t.Errorf("Magic is % x (%q), want % x (%q)",
+			Magic[:], string(Magic[:]), want[:], string(want[:]))
+	}
+
+	// The length is part of the format, not an accident of the literal: the
+	// tag occupies offMagic..offMagic+8, and readMeta compares exactly eight
+	// bytes.
+	if len(Magic) != 8 {
+		t.Errorf("the format tag is %d bytes, want 8", len(Magic))
+	}
+}
+
+// TestTheDerivationLabelsAreExactlyThese pins the two labels that separate
+// one derived key from another, as literals, for the same reason and with
+// the same measurement behind them as the format tag above: changing either
+// one re-keys every page of every encrypted database, and nothing else in
+// the suite reads their text.
+//
+// They are harder to catch than the format tag, not easier: a file written
+// under a different label fails at ErrKey, which reads as "wrong secret" for
+// a secret that is right, rather than anywhere that names a format.
+//
+// The :v1 suffixes are part of what is pinned. They mark the derivation
+// scheme, not the product's name, so renaming the product must not move them
+// — and a "v2" typed here by mistake is exactly the silent rotation this
+// pins against.
+func TestTheDerivationLabelsAreExactlyThese(t *testing.T) {
+	for _, c := range []struct{ name, got, want string }{
+		{"pageLabel", pageLabel, "sapedb/pager:page:v1"},
+		{"checkLabel", checkLabel, "sapedb/pager:key-check:v1"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s is %q, want %q", c.name, c.got, c.want)
+		}
+	}
+
+	// The two must never collapse onto one value: that is the entire point of
+	// deriving them separately, and it is not implied by either literal above
+	// being right on its own.
+	if pageLabel == checkLabel {
+		t.Error("the page key and the key-check are derived under the same label")
+	}
+}

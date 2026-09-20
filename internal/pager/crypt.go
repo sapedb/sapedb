@@ -52,16 +52,23 @@ const (
 // The labels that separate one derived key from another. A key derived for one
 // purpose must never be usable for a different one.
 //
-// Both still carry the product's old name on purpose, not by oversight: they
-// are baked into every page of every encrypted database that already exists,
-// and changing either one is a silent, unannounced key rotation — the key
-// derived for an existing file would stop matching the key derived from the
-// same secret, which reads as "wrong key" for a key that is right. They only
-// ever move together with a migration that re-derives and re-encrypts every
-// affected page under the new label. This is not that commit.
+// Both used to carry the product's old name, kept on the argument that
+// changing either one is a silent, unannounced key rotation: the key derived
+// for an existing file stops matching the key derived from the same secret,
+// which reads as "wrong key" for a key that is right, and fails at ErrKey
+// rather than anywhere that names a format. That argument was true and is
+// now spent — the repository carries no tags at all, so there has never been
+// a release, and no encrypted database written by a build anybody else ran
+// exists to be locked out. This commit is the rename; from 1.0.0 on these
+// only ever move together with a migration that re-derives and re-encrypts
+// every affected page.
+//
+// The :v1 suffixes stay :v1 on purpose. This is not a new version of the
+// derivation scheme — the algorithm, the salt and the key length are
+// untouched — it is the same scheme with the product's current name in it.
 const (
-	pageLabel  = "rsql/pager:page:v1"
-	checkLabel = "rsql/pager:key-check:v1"
+	pageLabel  = "sapedb/pager:page:v1"
+	checkLabel = "sapedb/pager:key-check:v1"
 )
 
 var (

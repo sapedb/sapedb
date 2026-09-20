@@ -40,14 +40,25 @@ const MetaBytes = 256
 // Both are read before anything else; a file that does not carry them is not
 // opened, rather than read as if it were.
 //
-// The first four of those bytes still spell the product's old name, on
-// purpose, not by oversight: this is the format tag written into every
-// database file that already exists, and changing it would make every one
-// of those files fail to open as "not ours" — for a file that is, in fact,
-// ours. It is a format tag, not a product name, and it only ever changes
-// together with Format, in a commit that also ships a migration for reading
-// the old tag. This is not that commit.
-var Magic = [8]byte{'R', 'S', 'Q', 'L', 'D', 'B', 0, 1}
+// This tag used to spell the product's old name, and was kept that way on
+// the argument that changing it makes every database file that already
+// exists fail to open. That argument was true and is now spent: this commit
+// is the one that changes it, because there has never been a release — the
+// repository carries no tags at all — so no database written by any build
+// anybody else ran exists to be broken. After 1.0.0 the argument comes back
+// and this tag is frozen for good, and moving it then is a migration's job,
+// not a rename's.
+//
+// A file carrying the old tag is refused by readMeta and readLabel as
+// ErrNotSapedb, which says it is not a file of ours rather than reading it
+// as if it were. That is the whole of the compatibility story, on purpose:
+// there is no fallback that reads the old tag, because a silent fallback is
+// how a format tag stops meaning anything.
+//
+// The length is eight bytes and the last two keep their meaning; only the
+// name changed. Six letters spell the product, which is why there are two
+// fewer padding bytes to think about than there look to be.
+var Magic = [8]byte{'S', 'A', 'P', 'E', 'D', 'B', 0, 1}
 
 const Format uint16 = 1
 
