@@ -13,11 +13,11 @@ import (
 // TestEveryIndexedFieldListReadIsOnTheList is the structural half of task
 // 0054 — the case table above (lockstep_test.go) only proves the lockstep
 // property holds at the sites that exist TODAY. It says nothing about a
-// EIGHTEENTH place that starts indexing into Fields/Terms/Group next
-// month (the list below has exactly 17 entries — Reviewer 0054 measured
+// NINETEENTH place that starts indexing into Fields/Terms/Group next
+// month (the list below has exactly 18 entries — Reviewer 0054 measured
 // that an earlier draft of this comment said "twelfth"/"thirteenth" here,
 // which was simply wrong arithmetic against the list's own length, not a
-// claim about the code).
+// claim about the code; SAPE-8 added the eighteenth, store.envelopeOf).
 //
 // This greps every non-test .go source file in internal/store and
 // internal/keys for an expression that reads a named element out of one of
@@ -77,6 +77,7 @@ var knownIndexedListReaders = map[string]string{
 	"store.index":             "finds a declared index by name, walking c.spec.Indexes by index",
 	"store.rollup":            "finds a declared rollup by name, walking c.spec.Rollups by index",
 	"store.ceiling":           "adds up the ceilings of a composed operation's steps, reaching each step's own address by index: &operation.Steps[i]",
+	"store.envelopeOf":        "walks a batch's own Steps by index to reach each step's collection or callee when building its cost envelope (SAPE-8)",
 	"store.runSteps":          "reaches each batch step's own address by index: &operation.Steps[i] — was runBatch's own loop until a step could call an operation and the loop had to be reachable without runBatch's guards",
 	"store.sameRollup":        "compares two rollups' Group and Sum element by element, by index",
 	"store.sameShape":         "compares two indexes' Fields and Include element by element, by index",
