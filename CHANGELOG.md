@@ -5,6 +5,34 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ## Unreleased
 
+### Added
+
+- A public Go package, `sapedb` (`github.com/sapedb/sapedb`), at the module
+  root: task 0068 §1's answer to "what does a Go client outside this
+  repository import". Twenty type aliases for the value shapes a caller
+  sends and receives (`Access`, `Bound`, `Catalogue`, `Condition`,
+  `Endpoint`, `Field`, `Index`, `Key`, `Operation`, `Parameter`,
+  `Partition`, `Result`, `Rollup`, `Spec`, `Step`, `Term`, `Connection`,
+  `Refused`, `Welcome`, `Options`), `Parse` and `Dial`, a `Client` that
+  wraps `internal/wire`'s (kept a wrapper rather than an alias so its
+  methods' documented return types are this package's own, not an
+  unlinkable `internal/` path), and `Explored`. `internal/store`,
+  `internal/wire` and `internal/connection` stay exactly where they are —
+  nothing moved out of `internal/`, only aliased or wrapped. Guarded by
+  `TestTheSurfaceIsExactlyTheseThirtyNames` in `sapedb_test.go`, which reads
+  every `*.go` file at the module root and fails on any exported name added,
+  removed or renamed.
+
+### Fixed
+
+- `internal/wire.Client.Invoke` sent its arguments under the JSON key
+  `"arguments"`; the server's `call` struct (`internal/server/server.go`)
+  decodes `"args"`. Every declared operation invoked through this client
+  silently ran with no arguments at all. Unexercised until now — the CLI's
+  shell only ever calls `Explore`/`WhatIsHere`, never `Invoke` — and caught
+  by the new `sapedb` package's end-to-end wrapper test, the first thing in
+  this repository to call `Invoke` against a real server.
+
 ### Changed
 
 - `Spec.Indexes` (a collection's declared indexes, as `Collection.Spec()` and

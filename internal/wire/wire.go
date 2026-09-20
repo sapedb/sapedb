@@ -175,8 +175,17 @@ func (c *Client) WhatIsHere() (store.Catalogue, error) {
 }
 
 // Invoke runs a declared operation.
+//
+// The body key is "args", not "arguments": that is what the server's own
+// `call` struct decodes (internal/server/server.go) and what the TypeScript
+// client sends. Before task 0068 §1, nothing in this repository or its
+// TypeScript sibling ever called this method against a real server — cli's
+// shell only ever calls Explore/WhatIsHere — so a body sent under the wrong
+// key had nothing to catch it: the server silently saw no arguments at all
+// on every call. Caught by sapedb_test.go's end-to-end wrapper test, the
+// first thing to invoke a declared operation through this client.
 func (c *Client) Invoke(name string, arguments map[string]any) (store.Result, error) {
-	payload, err := c.ask(protocol.Invoke, map[string]any{"command": name, "arguments": arguments})
+	payload, err := c.ask(protocol.Invoke, map[string]any{"command": name, "args": arguments})
 	if err != nil {
 		return store.Result{}, err
 	}
