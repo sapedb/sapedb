@@ -190,11 +190,21 @@ func endpoint(bound *Bound) *Endpoint {
 	return end
 }
 
-// Catalogue is what a database holds: the collections and their indexes, and
-// the operations declared against them.
+// Catalogue is what a database holds: the collections and their indexes, the
+// operations declared against them, and each operation's cost envelope.
+//
+// Envelopes rides alongside Operations, in the same order, rather than
+// inside it: Operation is also the shape a schema file and DeclareOperation
+// read, and an envelope is not something anybody declares — it is derived,
+// and mixing a derived field into a declared struct is how the two get
+// confused about which one is the source of truth. See Envelope's own doc
+// for what each entry answers and why: this is SAPE-8's answer to "is a
+// composed operation's envelope readable without walking its steps by
+// hand" — it is, because WhatIsHere hands it over already walked.
 type Catalogue struct {
 	Collections []Spec      `json:"collections"`
 	Operations  []Operation `json:"operations"`
+	Envelopes   []Envelope  `json:"envelopes"`
 }
 
 // WhatIsHere answers "what is in this database", and records that it was
@@ -212,7 +222,7 @@ func (s *Store) WhatIsHere(caller Caller) (Catalogue, error) {
 	// the ordinary way to use an array — breaks exactly on the database that
 	// most needs the catalogue read to work: the one nobody has declared
 	// anything in yet.
-	here := Catalogue{Collections: []Spec{}}
+	here := Catalogue{Collections: []Spec{}, Envelopes: []Envelope{}}
 
 	for _, name := range s.Collections() {
 		collection, err := s.Collection(name)
@@ -227,6 +237,17 @@ func (s *Store) WhatIsHere(caller Caller) (Catalogue, error) {
 		return Catalogue{}, err
 	}
 	here.Operations = operations
+
+	// One envelope per operation, in the same order, computed now rather than
+	// left for a caller to derive by walking Steps by hand — see Catalogue's
+	// own doc.
+	for _, operation := range operations {
+		envelope, err := s.envelopeOf(operation)
+		if err != nil {
+			return Catalogue{}, err
+		}
+		here.Envelopes = append(here.Envelopes, envelope)
+	}
 
 	if _, err := s.record(Change{
 		Kind: ChangeRead,

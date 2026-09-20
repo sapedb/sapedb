@@ -5,6 +5,29 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ## Unreleased
 
+### Added
+
+- **An operation's cost envelope is now readable without running it
+  (SAPE-8).** `Store.Envelope(name, version)` and every entry of
+  `Catalogue.Envelopes` (from `WhatIsHere`) answer, from the declaration
+  alone: which collections it touches, which indexes it walks, the most rows
+  it may hand back, and which fields escape to the caller — for a composed
+  operation too, without opening the operations its steps name by hand.
+
+  The row ceiling reuses `compose.go`'s existing `ceiling()`, the same number
+  already checked against a composed operation's declared limit at declare
+  time, so the envelope cannot disagree with what running it actually costs.
+  A standalone count is the one exception: its declared `Limit` (how far it
+  walks) is reported directly, since `ceiling()`'s own "1" answers a
+  different question (what a count contributes to an enclosing batch's sum,
+  a shape a count can never actually appear in — it is refused as a callee).
+
+  This also closes a real gap `Operation.Limit`'s own `json:"limit,omitempty"`
+  left open: that field is absent from the wire — reading as indistinguishable
+  from "unlimited" — for every action whose ceiling is not a number it writes
+  down itself (a get, a write, a plain batch of them). The envelope's `Limit`
+  is never absent, for any action.
+
 ### Breaking
 
 - **A grant now expires, and the signed message changed shape to say so
