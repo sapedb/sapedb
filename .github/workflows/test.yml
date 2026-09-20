@@ -1,0 +1,125 @@
+# Until this file existed, this repository had no CI of any kind. Measured:
+# `git log --all -- .github` returned exactly one commit, the release workflow
+# added the same day as this one. Every green run of this suite — nineteen
+# packages, four of which spawn real sapedbd processes, and a mutation
+# discipline the README calls the standard rather than the floor — happened
+# because a person remembered to run it.
+#
+# The release workflow does run `go vet` and `go test`, but it is triggered by
+# a tag. So without this file, the first automated run of this project's own
+# tests would land in the middle of cutting a release — after the one step
+# this project's own plan lists as irreversible.
+#
+# Three scars are borrowed deliberately, each paid for once already in the
+# client repositories during the same week:
+#
+#   1. A skipped test and a passing test produce the same summary line. So the
+#      skip count is read in the same step that ran the tests, and any skip is
+#      red. There is exactly one legitimate skip in this repository —
+#      internal/build/build_test.go skips when the test binary was itself
+#      stamped, because then there is no unstamped default left to check — and
+#      it does not fire here, because nothing below passes -ldflags to the test
+#      binary. If that ever changes, this guard is what will say so.
+#   2. GitHub runs every `run:` block under `bash -e`, and `grep -c` exits 1
+#      when it counts zero. Inside a variable assignment that kills the whole
+#      step, including the handling written for the zero case three lines
+#      below. Hence `|| true` on the count and an explicit check after it.
+#   3. `go test` reports a failure through its exit code, and a pipe hands back
+#      the exit code of the last command in it. `set -o pipefail`, and the
+#      status is captured the moment the pipe finishes rather than left to
+#      survive the commands that follow.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  suite:
+    name: the whole suite, nothing skipped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # gofmt before anything slower: it is the cheapest possible red, and a
+      # repository that argues this carefully about its comments should not
+      # land a file it did not format.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l . || true)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go build ./...
+      - run: go vet ./...
+
+      # -v is on so that skips are visible at all: without it `go test` prints
+      # nothing for a skipped test, which is the whole failure this guard
+      # exists to catch. The live suites here build and start their own
+      # sapedbd, so unlike the client repositories there is no binary path to
+      # set and no environment variable standing between the tests and running.
+      - name: Run every test
+        run: |
+          set -o pipefail
+          go test ./... -count=1 -v 2>&1 | tee "$RUNNER_TEMP/report.txt"
+          status=$?
+          skipped=$(grep -c '^--- SKIP:' "$RUNNER_TEMP/report.txt" || true)
+          [ -n "$skipped" ] || skipped=0
+          echo "skipped: $skipped"
+          if [ "$skipped" != "0" ]; then
+            echo "::error::$skipped test(s) skipped. This repository has one legitimate skip and it cannot fire here — so a skip means a test stopped running, not that it was meant to."
+            grep '^--- SKIP:' "$RUNNER_TEMP/report.txt" || true
+            exit 1
+          fi
+          # A positive control on the report itself: a run that produced no
+          # PASS lines at all built nothing and proved nothing, and would sail
+          # past the skip check above with a count of zero.
+          passed=$(grep -c '^--- PASS:' "$RUNNER_TEMP/report.txt" || true)
+          echo "passed: $passed"
+          if [ "${passed:-0}" -lt 100 ]; then
+            echo "::error::only $passed passing tests were reported, which is far below this suite's size — the run did not do what it looks like it did."
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test exited $status"
+            exit 1
+          fi
+
+  race:
+    name: under the race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # Its own job rather than a second command in the one above: -race is
+      # slow, and a race is a different kind of answer from a failed
+      # assertion. Follower mode gave the announce channel a second writer
+      # alongside Serve; -race was clean when that landed, and keeping it clean
+      # is a machine's job rather than a memory's.
+      - name: go test -race
+        run: |
+          set -o pipefail
+          go test ./... -count=1 -race 2>&1 | tee "$RUNNER_TEMP/race.txt"
+          status=$?
+          if grep -q 'DATA RACE' "$RUNNER_TEMP/race.txt"; then
+            echo "::error::the race detector reported a data race."
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test -race exited $status"
+            exit 1
+          fi
