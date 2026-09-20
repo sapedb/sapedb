@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"net"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -32,21 +31,16 @@ func TestPartitionedReadsAreWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Server.Close only closes db.pages, the main file — it never walks
-	// db.store's own open partition files (internal/server/server.go, the
-	// loop in Close()), so each one's exclusive flock (internal/vfs.OpenFile)
-	// is still held by an *os.File this test no longer has a name for. That
-	// is a real, separate bug (filed as debt, not fixed here — out of scope
-	// for A1). Its only visible effect on this test is that reopening the
-	// same directory right away can fail with vfs.ErrLocked, which has
-	// nothing to do with the race this test exists to catch. Forcing a GC
-	// here makes the abandoned *os.File values unreachable and lets their
-	// runtime finalizers close the fds (and drop the flocks) before the
-	// second server opens the same files — without this, the test is flaky
-	// for a reason that is not the one it is measuring.
-	runtime.GC()
-	runtime.GC()
-
+	// No runtime.GC() here any more. It used to be: Server.Close closed
+	// db.pages and never walked db.store's own open partition files, so each
+	// one's exclusive lock was still held by an *os.File nothing had a name
+	// for, and reopening the same directory failed with vfs.ErrLocked for a
+	// reason that had nothing to do with the race this test measures. Two
+	// forced collections ran the fd finalizers and papered over it. Close now
+	// gives those files back on purpose (internal/store's Store.Close, called
+	// from Server.Close), measured by TestClosingAServerGivesBackItsPartition
+	// FilesToo in close_test.go — so the dodge is gone, and if that fix ever
+	// regresses this test goes red with it instead of hiding it.
 	server, address := serving(t, dir)
 
 	clients := make([]*client, len(spread))

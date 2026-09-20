@@ -324,6 +324,18 @@ func (s *Server) Close() error {
 	var failed error
 	for _, db := range s.open {
 		db.mutex.Lock()
+		// The partitions first, then the leader. A database is not one file:
+		// db.store opened a file per partition it was asked for, each under
+		// an exclusive lock of its own, and closing db.pages lets go of the
+		// leader only. Before this line, those partition files stayed locked
+		// for the life of the process — s.open is emptied just below, so the
+		// *os.File values behind them became unreachable with nobody holding
+		// a name for them, and the next Server on the same directory was
+		// refused with vfs.ErrLocked on a .part file until a garbage
+		// collection happened to run their finalizers.
+		if err := db.store.Close(); err != nil && failed == nil {
+			failed = err
+		}
 		if err := db.pages.Close(); err != nil && failed == nil {
 			failed = err
 		}

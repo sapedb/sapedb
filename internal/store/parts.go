@@ -325,6 +325,19 @@ func (s *Store) abandonParts() error {
 	return nil
 }
 
+// Close lets go of the partition files this database has open.
+//
+// The leader file is not this store's to close: whoever opened it made the
+// pager and closes that. The partitions are — Part() opened them, each one
+// holds an exclusive lock of its own (internal/vfs.OpenFile), and until this
+// existed there was no way to give them back. internal/server's Close only
+// ever closed the leader, so every partition a process had touched stayed
+// locked for the rest of that process's life, and a second Server on the same
+// directory was refused with vfs.ErrLocked on a .part file it had never
+// opened. Closing them here is idempotent: the maps are emptied, so a second
+// call has nothing to close.
+func (s *Store) Close() error { return s.closeParts() }
+
 // closeParts lets go of the files.
 func (s *Store) closeParts() error {
 	var first error
