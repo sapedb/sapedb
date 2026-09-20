@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/sapedb/sapedb/internal/build"
+	"github.com/sapedb/sapedb/internal/bundle"
 	"github.com/sapedb/sapedb/internal/dbkey"
 	"github.com/sapedb/sapedb/internal/dbname"
 	"github.com/sapedb/sapedb/internal/pager"
@@ -1253,6 +1254,28 @@ func codeFor(err error) string {
 		{store.ErrDeclaration, "declaration"},
 		{store.ErrDamaged, "damaged"},
 		{store.ErrIncompatible, "incompatible"},
+
+		// The bundle refusals (SAPE-10). Nothing in this server hands a
+		// bundle to anything yet — verification is offline, in front of a
+		// server rather than inside one — so none of these six is reachable
+		// from the wire at this commit, and they are here anyway. A code is
+		// part of the tagged contract with every client, so one added after
+		// the tag is a change clients have to cope with, while one added
+		// before it is an edit; and ISS-21 is this project's own record of
+		// what it costs to let a refusal arrive as `failed` with no name of
+		// its own. Naming them once, together, is cheaper than naming them
+		// later, one incident at a time.
+		//
+		// They are six rather than one because each is a different thing for
+		// whoever reads it to do: fetch the bundle again, ask the author to
+		// sign it, ask an operator to add a key, ask an operator to write a
+		// list at all, or throw the file away.
+		{bundle.ErrUnsigned, "bundle_unsigned"},
+		{bundle.ErrBadSignature, "bundle_signature"},
+		{bundle.ErrUntrusted, "bundle_untrusted"},
+		{bundle.ErrNoTrust, "bundle_no_trust"},
+		{bundle.ErrKey, "bundle_key"},
+		{bundle.ErrBundle, "bundle"},
 	} {
 		if errors.Is(err, known.err) {
 			return known.code
