@@ -64,10 +64,22 @@ may require the document to already be in a particular state. That last part is
 optimistic locking, written down in the schema where somebody deciding whether
 to trust an operation can read it.
 
-**Every operation is a transaction.** Atomic across the document, every index
+**Every write is a transaction.** Atomic across the document, every index
 entry and the log line; durable before the answer goes back; isolated because
-there is one writer. Which is why there is no `begin`: there is nothing it would
-add.
+only one write runs against a database at a time. Which is why there is no
+`begin`: there is nothing it would add.
+
+A read may now run alongside other reads instead of queueing behind them, but
+never alongside a write — a database's lock is a writer's alone or every
+reader's together, never both at once. So today, a read is always strictly
+before or strictly after any given write, the same guarantee the single-writer
+design has always made, just no longer serialized against *other* reads too.
+That describes what sapedb does today, not a promise about the mechanism: the
+pager already carries the pieces a later snapshot-read path would need
+(`Store.Take`, `pager.Snapshot`, a freelist that counts open snapshots), and
+none of it is called from the serving path yet. If a read is ever served from
+an older snapshot while writes continue past it, this paragraph is what
+changes — atomicity and durability of writes would not.
 
 **The change log** is written in the same transaction as the change it
 describes. One log serves replication, point-in-time recovery, change feeds and
