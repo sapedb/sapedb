@@ -481,3 +481,89 @@ func TestTruncateAtRuneNeverSplitsARune(t *testing.T) {
 		}
 	}
 }
+
+// ringOfAny and bagOfAny are named types whose underlying types are []any
+// and map[string]any. Naming them is the whole point: renderCapped's fast
+// paths are an exact-type switch, so a named type misses them and falls
+// through to renderCappedByReflection instead. That branch is the one with
+// no content guard — the only test that reached it before this one
+// (describe_named_cycle_test.go) asserts that a named self-referential type
+// does not crash the process and that something came back, which is a
+// statement about liveness, not about output. A reflection branch that
+// dropped a leaf, sorted map keys the wrong way, joined with the wrong
+// separator or emitted its cut marker twice would satisfy every assertion
+// there unchanged.
+type ringOfAny []any
+type bagOfAny map[string]any
+
+// The golden strings below were produced by running describe on these exact
+// values and reading back what was printed, per this file's house rule
+// against hand-deriving an expected string. They were then checked against
+// describeMaxDepth and describeMaxElementsPerLevel rather than accepted
+// because they were what came out — a golden string copied from a run is
+// only evidence once somebody has said why that is the right answer.
+func TestDescribeOfNamedTypesRendersTheSameShapeTheExactTypesDo(t *testing.T) {
+	// A named slice must render identically to the unnamed one in
+	// TestDescribeOfASelfReferentialSliceContentIsWellFormedNotJustBounded
+	// above. Two branches, one answer: that agreement is the property worth
+	// pinning, because the reflection branch exists precisely to stand in
+	// for the fast one and a stand-in that renders differently is a second
+	// output format nobody declared.
+	ring := ringOfAny{"before", nil, "after"}
+	ring[1] = ring
+
+	got := describe(ring)
+	want := "[before [before [before [before [before [before … after] after] after] after] after] after]"
+	if got != want {
+		t.Fatalf("describe(named self-referential slice) = %q, want %q", got, want)
+	}
+	if n := strings.Count(got, "before"); n != describeMaxDepth {
+		t.Errorf("named slice contains %q %d times, want %d", "before", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "…"); n != 1 {
+		t.Errorf("named slice contains the cut marker %d times, want exactly 1", n)
+	}
+
+	// A named map. "a" before "z" is the assertion that matters here: the
+	// map branch sorts on each key's %v text, and an unsorted branch would
+	// still be bounded, still be valid UTF-8, and still hold both keys.
+	bag := bagOfAny{"z": "last", "a": nil}
+	bag["a"] = bag
+
+	got = describe(bag)
+	want = "map[a:map[a:map[a:map[a:map[a:map[a:… z:last] z:last] z:last] z:last] z:last] z:last]"
+	if got != want {
+		t.Fatalf("describe(named self-referential map) = %q, want %q", got, want)
+	}
+	if n := strings.Count(got, "z:last"); n != describeMaxDepth {
+		t.Errorf("named map contains %q %d times, want %d", "z:last", n, describeMaxDepth)
+	}
+	if n := strings.Count(got, "…"); n != 1 {
+		t.Errorf("named map contains the cut marker %d times, want exactly 1", n)
+	}
+
+	// The width ceiling, which the depth cases above never reach: 14
+	// elements, of which describeMaxElementsPerLevel are shown and the rest
+	// become one marker. A branch that showed all 14, or that showed 10 and
+	// forgot to say it had cut anything, is the failure this pins.
+	wide := make(ringOfAny, 0, 14)
+	for i := 0; i < 14; i++ {
+		wide = append(wide, i)
+	}
+
+	got = describe(wide)
+	want = "[0 1 2 3 4 5 6 7 8 9 …]"
+	if got != want {
+		t.Fatalf("describe(named wide slice) = %q, want %q", got, want)
+	}
+	// Counted rather than eyeballed off the golden string: strip the
+	// brackets, split on the separator, and the last field must be the
+	// marker with describeMaxElementsPerLevel real elements before it.
+	fields := strings.Split(strings.Trim(got, "[]"), " ")
+	if n := len(fields) - 1; n != describeMaxElementsPerLevel {
+		t.Errorf("named wide slice shows %d elements, want %d", n, describeMaxElementsPerLevel)
+	}
+	if last := fields[len(fields)-1]; last != "…" {
+		t.Errorf("named wide slice ends with %q, want the cut marker", last)
+	}
+}
