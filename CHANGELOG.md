@@ -64,6 +64,46 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A worked external-operation module, and the tests that keep it honest
+  (SAPE-12).** `examples/library/module.json` is a lending library: three
+  collections with their own keys, four indexes, one rollup, and nine
+  operations across five of the nine actions. It is deliberately a whole small
+  module rather than one missing verb, because a module is the hard case — it
+  has to bring its own storage, and until SAPE-14 shipped `establish` it could
+  not.
+
+  **What is shipped is the draft, not a sealed bundle.** `sapedb seal` needs a
+  private key, and a private key in a repository is not private. The draft is
+  the source; the bundle is a build product an author makes with their own key,
+  and `keygen` → `seal` → `verify` → `install` is four commands. The trade is
+  that nobody can verify a signature on a file shipped here, and what is gained
+  is that the example cannot teach anybody to commit a signing key.
+
+  **Every read in it declares a `projection`**, which is the rule SAPE-13 writes
+  down and the thing the older `examples/ledger` fixture is silent on. Measured
+  through `@ecosy/sapedb`'s generator: of the nine operations, three reads emit
+  a named-field row, five writes and the count emit `row: never`, and exactly
+  one emits `Record<string, unknown>` — `library:loans.per_member`, because a
+  rollup row is a synthetic `{count, group}` the store builds from the rollup's
+  own declaration and no projection is applied to it. The same command against
+  `fixtures/ledger.schema.json` emits three, all of them document reads. The
+  rollup case is recorded as debt rather than worked around: typing it means
+  teaching a client to read `collections[].rollups[]`, which none does today.
+
+  **`library_live_test.go` holds three things.** That the module installs over
+  the wire, on one connection, into a database that has none of its collections
+  — SAPE-14's eighth acceptance criterion, which SAPE-14 shipped without and
+  carried here; the daemon's pid is compared before and after rather than
+  inferred from the socket staying up. That each cost envelope says what the
+  operation actually does, checked by running it — `borrow` lists three
+  collections and `give_back` lists two of the same three, and the member
+  document is read directly to prove `give_back` leaves alone the collection its
+  envelope omits. And that every read of documents declares a projection, in
+  both directions, so that adding a fourth unprojected scan reddens it too.
+
+  Every expectation in that file is typed out on the test side. None of it is
+  read out of `module.json` and compared against itself.
+
 - **A signed bundle can now be checked and installed (SAPE-28).** SAPE-10
   could seal and verify one and stopped there: nothing read a trusted key out
   of any configuration, and none of the six `bundle_*` refusal codes in

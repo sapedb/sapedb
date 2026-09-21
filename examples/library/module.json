@@ -1,0 +1,230 @@
+{
+  "format": "sapedb/bundle:v1",
+  "name": "library",
+  "version": "1.0.0",
+  "signer": "the sapedb worked example",
+
+  "collections": [
+    {
+      "name": "library_books",
+      "key": { "path": "id", "type": "string" },
+      "indexes": [
+        {
+          "name": "by_author",
+          "fields": [
+            { "path": "author", "type": "string", "missing": "skip" },
+            { "path": "title", "type": "string", "missing": "skip" }
+          ]
+        },
+        {
+          "name": "by_shelf",
+          "fields": [{ "path": "shelf", "type": "string", "missing": "skip" }]
+        }
+      ]
+    },
+
+    {
+      "name": "library_members",
+      "key": { "path": "id", "type": "string" },
+      "indexes": [
+        {
+          "name": "by_name",
+          "fields": [{ "path": "name", "type": "string", "missing": "skip" }]
+        }
+      ]
+    },
+
+    {
+      "name": "library_loans",
+      "key": { "path": "id", "type": "string", "auto": "ulid" },
+      "indexes": [
+        {
+          "name": "by_member",
+          "fields": [
+            { "path": "member", "type": "string", "missing": "skip" },
+            { "path": "borrowed", "type": "number", "missing": "last" }
+          ]
+        },
+        {
+          "name": "by_book",
+          "fields": [{ "path": "book", "type": "string", "missing": "skip" }]
+        }
+      ],
+      "rollups": [
+        {
+          "name": "loans_per_member",
+          "group": [{ "path": "member", "type": "string", "missing": "skip" }],
+          "count": true
+        }
+      ]
+    }
+  ],
+
+  "operations": [
+    {
+      "name": "library:books.shelve",
+      "collection": "library_books",
+      "action": "insert",
+      "input": [
+        { "name": "id", "type": "string", "required": true },
+        { "name": "title", "type": "string", "required": true },
+        { "name": "author", "type": "string", "required": true },
+        { "name": "shelf", "type": "string", "required": true }
+      ],
+      "document": {
+        "id": { "arg": "id" },
+        "title": { "arg": "title" },
+        "author": { "arg": "author" },
+        "shelf": { "arg": "shelf" },
+        "on_loan": { "value": false }
+      }
+    },
+
+    {
+      "name": "library:members.join",
+      "collection": "library_members",
+      "action": "insert",
+      "input": [
+        { "name": "id", "type": "string", "required": true },
+        { "name": "name", "type": "string", "required": true },
+        { "name": "joined", "type": "number", "required": true }
+      ],
+      "document": {
+        "id": { "arg": "id" },
+        "name": { "arg": "name" },
+        "joined": { "arg": "joined" }
+      }
+    },
+
+    {
+      "name": "library:books.get",
+      "collection": "library_books",
+      "action": "get",
+      "input": [{ "name": "id", "type": "string", "required": true }],
+      "key": { "arg": "id" },
+      "projection": ["id", "title", "author", "shelf", "on_loan"]
+    },
+
+    {
+      "name": "library:books.by_author",
+      "collection": "library_books",
+      "action": "scan",
+      "index": "by_author",
+      "limit": 50,
+      "input": [{ "name": "author", "type": "string", "required": true }],
+      "from": { "terms": [{ "arg": "author" }] },
+      "to": { "terms": [{ "arg": "author" }] },
+      "projection": ["id", "title", "shelf", "on_loan"]
+    },
+
+    {
+      "name": "library:books.on_shelf",
+      "collection": "library_books",
+      "action": "count",
+      "index": "by_shelf",
+      "limit": 1000,
+      "input": [{ "name": "shelf", "type": "string", "required": true }],
+      "from": { "terms": [{ "arg": "shelf" }] },
+      "to": { "terms": [{ "arg": "shelf" }] }
+    },
+
+    {
+      "name": "library:loans.borrow",
+      "collection": "library_loans",
+      "action": "batch",
+      "input": [
+        { "name": "book", "type": "string", "required": true },
+        { "name": "member", "type": "string", "required": true },
+        { "name": "borrowed", "type": "number", "required": true },
+        { "name": "due", "type": "number", "required": true }
+      ],
+      "steps": [
+        {
+          "name": "book",
+          "action": "update",
+          "collection": "library_books",
+          "key": { "arg": "book" },
+          "exists": true,
+          "require": [{ "path": "on_loan", "equals": { "value": false } }],
+          "set": { "on_loan": { "value": true } }
+        },
+        {
+          "name": "member",
+          "action": "update",
+          "collection": "library_members",
+          "key": { "arg": "member" },
+          "exists": true,
+          "set": { "last_borrowed": { "arg": "borrowed" } }
+        },
+        {
+          "name": "loan",
+          "action": "insert",
+          "collection": "library_loans",
+          "document": {
+            "book": { "step": "book", "field": "key" },
+            "member": { "step": "member", "field": "key" },
+            "borrowed": { "arg": "borrowed" },
+            "due": { "arg": "due" },
+            "returned": { "value": false }
+          }
+        }
+      ]
+    },
+
+    {
+      "name": "library:loans.give_back",
+      "collection": "library_loans",
+      "action": "batch",
+      "input": [
+        { "name": "loan", "type": "string", "required": true },
+        { "name": "book", "type": "string", "required": true },
+        { "name": "returned_at", "type": "number", "required": true }
+      ],
+      "steps": [
+        {
+          "name": "loan",
+          "action": "update",
+          "collection": "library_loans",
+          "key": { "arg": "loan" },
+          "exists": true,
+          "require": [{ "path": "returned", "equals": { "value": false } }],
+          "set": {
+            "returned": { "value": true },
+            "returned_at": { "arg": "returned_at" }
+          }
+        },
+        {
+          "name": "book",
+          "action": "update",
+          "collection": "library_books",
+          "key": { "arg": "book" },
+          "exists": true,
+          "require": [{ "path": "on_loan", "equals": { "value": true } }],
+          "set": { "on_loan": { "value": false } }
+        }
+      ]
+    },
+
+    {
+      "name": "library:loans.of_member",
+      "collection": "library_loans",
+      "action": "scan",
+      "index": "by_member",
+      "limit": 25,
+      "direction": { "value": "reverse" },
+      "input": [{ "name": "member", "type": "string", "required": true }],
+      "from": { "terms": [{ "arg": "member" }] },
+      "to": { "terms": [{ "arg": "member" }] },
+      "projection": ["id", "book", "borrowed", "due", "returned"]
+    },
+
+    {
+      "name": "library:loans.per_member",
+      "collection": "library_loans",
+      "action": "totals",
+      "rollup": "loans_per_member",
+      "limit": 100,
+      "input": []
+    }
+  ]
+}
