@@ -1166,9 +1166,25 @@ func TestTheToolIsRefusedWhileAServerHoldsTheDirectory(t *testing.T) {
 // lays out eighteen cases below, each changing exactly one axis from the
 // case before it, all read through walkTree and assertTreeUnchanged above so
 // a failure names exactly what appeared or disappeared. Every case gets its
-// own start(t) — the shared-fixture trap in TestWhatIsNotACommandIsExplained
-// above (see the comment on that test's "apply with no file" row) is not one
-// this table repeats.
+// own start(t), so one case cannot inherit a directory another one dirtied.
+//
+// This sentence used to point somewhere: "see the comment on that test's
+// 'apply with no file' row" in TestWhatIsNotACommandIsExplained. There is no
+// such comment, and `git show 7ed9bf0:internal/cli/cli_test.go` — the commit
+// that wrote this pointer — shows that row was a bare
+// `"apply with no file": {"apply"},` then too. It was a reference to
+// something that never existed, and it outlived the problem it described as
+// well: 7ed9bf0 is the commit that stopped a refused argument opening the
+// database, so that test shares a directory across its rows and leaves
+// nothing in it. Measured rather than assumed — the fixture was replayed with
+// the directory snapshotted after every row and after both trailing checks:
+// zero entries every time, against a control in the same directory that
+// produces the four-entry shape immediately.
+//
+// Kept as a note rather than deleted, because a dangling pointer is the more
+// interesting half. Nothing here can go red when a cross-reference stops
+// resolving, so the only thing standing between this file and another one is
+// somebody reading it.
 
 // canonicalShape is the tree a database actually leaves behind once it opens
 // and something inside it succeeds: .lock and the account folder from
