@@ -75,6 +75,20 @@ many rows it may read; at that number it refuses rather than hashing a prefix,
 because a digest of part of a range is indistinguishable from a digest of all of
 it. `hash` at the shell does the same thing at a prompt.
 
+**`deleteRange`.** The eleventh action, and the first that writes while it
+walks: a stretch of keys removed in key order, up to the number the declaration
+says, answering how many went, the last key removed and whether more remain —
+which is a cursor, so a thousand rows go in pages. The name is the misleading
+part and the cost is worth reading before the first call: this is not a
+truncation of a keyspace. Every row removed is read first (its index entries
+come from its contents), then its entries go, then every rollup it fed is
+adjusted, then the row, then a change-log entry — so a range delete of ten
+thousand rows writes ten thousand log entries, exactly the entries deleting
+them one at a time would write, which is what lets a follower replay it
+knowing nothing new. The limit is required with no default, because it bounds
+what is destroyed. `delete` at the shell does the same thing at a prompt, and
+is the one typed access that writes.
+
 **Composed operations.** A step of a batch may name an operation that is
 already declared instead of a collection, which is how a vocabulary gets built
 out of itself rather than by adding an action for every shape somebody wants:

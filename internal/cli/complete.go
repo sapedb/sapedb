@@ -39,11 +39,11 @@ func suggest(line string, here store.Catalogue) []string {
 // candidates is everything that could stand in this position.
 func candidates(before []string, here store.Catalogue) []string {
 	if len(before) == 0 {
-		return []string{"count", "declare", "exit", "get", "hash", "help", "invoke", "ls", "scan"}
+		return []string{"count", "declare", "delete", "exit", "get", "hash", "help", "invoke", "ls", "scan"}
 	}
 
 	switch before[0] {
-	case "get", "scan", "count", "hash":
+	case "get", "scan", "count", "hash", "delete":
 	case "invoke":
 		// The names the database holds, then the arguments the named
 		// declaration holds. This is the completion this shell is best at and
@@ -80,6 +80,16 @@ func candidates(before []string, here store.Catalogue) []string {
 	// refuses, which this file's own doc says is worse than offering nothing.
 	if before[0] == "hash" {
 		return hashing(collection, before[2:])
+	}
+
+	// A delete is a third little grammar: it walks key order, so there is no
+	// index straight after the collection, and it returns no rows, so there
+	// is no `fields` and no `field` or `decode` either. What is left is the
+	// bounds and the limit — and `limit` is offered here even when one has
+	// already been typed, the same as every other keyword in this file,
+	// because the parser accepts a second one and takes the last.
+	if before[0] == "delete" {
+		return []string{"after", "before", "from", "limit", "to"}
 	}
 
 	rest := before[2:]

@@ -307,7 +307,12 @@ func takes(operation store.Operation) string {
 func showInvoked(operation store.Operation, result store.Result, out io.Writer) {
 	switch operation.Action {
 	case store.ActionGet, store.ActionScan, store.ActionCount, store.ActionTotals,
-		store.ActionHashRange:
+		store.ActionHashRange, store.ActionDeleteRange:
+		// A deleteRange is in this list although it writes, because it is the
+		// one write that has something to print beyond "changed N": a cursor.
+		// Printing it through the lines below would drop the "and more"
+		// sentence, and an operator who could not tell a finished range from
+		// a stopped one would stop paging one page early.
 		showResult(operation.Action, result, out)
 		return
 	}

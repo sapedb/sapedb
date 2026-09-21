@@ -44,6 +44,7 @@ const shellHelp = `  ls                                 what this database holds
   scan <collection> [index] [...]    a stretch of an index
   count <collection> [index] [...]   how many are in that stretch
   hash <collection> field <p> [...]  SHA-256 of that stretch, joined
+  delete <collection> limit <n> [..] remove that stretch, at most n rows
   declare [name]                     the operation that would do the last thing
   help                               this
   exit                               leave
@@ -59,6 +60,16 @@ const shellHelp = `  ls                                 what this database holds
     decode base64         read each value as base64 first
     limit <n>             how many rows it may read — required, and it
                           refuses at that number rather than hashing part
+
+  A delete takes the same bounds, in key order and with no index, plus:
+    limit <n>             how many rows it may remove — required, because a
+                          number this shell picked would be this shell
+                          deciding how much of your data goes
+
+  It removes in key order and stops at the limit, printing how many went,
+  the last key removed, and whether more remain. Each row removed is one
+  entry in the change log, the same entry deleting it on its own would
+  write — so a range of ten thousand is ten thousand entries.
 
   Values are JSON: "a string", 42, true, null.
 
@@ -187,7 +198,7 @@ func one(look Looking, line string, drafted *store.Operation, out io.Writer) (bo
 		// nothing for `declare` to print that is not already stored.
 		return false, nil, invoking(look, words, out)
 
-	case "get", "scan", "count", "hash":
+	case "get", "scan", "count", "hash", "delete":
 		access, err := access(words)
 		if err != nil {
 			return false, nil, err
@@ -237,8 +248,11 @@ func access(words []string) (store.Access, error) {
 		return asked, nil
 	}
 
-	// A bare word straight after the collection is the index. Anything else is
-	// a keyword, and the clustered index is what you get by saying nothing.
+	// A bare word straight after the collection is the index, for the two
+	// commands that walk one. A hash and a delete walk key order and nothing
+	// else, so for those a bare word here is a mistake and is reported as
+	// one rather than carried to a refusal further in. Anything else is a
+	// keyword, and the clustered index is what you get by saying nothing.
 	//
 	// Which means a line that starts like another database's query language —
 	// "scan books where shelf = ..." — has its first wrong word read as an
@@ -246,7 +260,7 @@ func access(words []string) (store.Access, error) {
 	// what the line was understood to be. A parser that reports the wrong word
 	// sends somebody looking at the wrong half of what they typed.
 	read := asked.Kind + " " + asked.Collection
-	if asked.Kind != "hash" && len(rest) > 0 && !keyword(rest[0]) {
+	if asked.Kind != "hash" && asked.Kind != "delete" && len(rest) > 0 && !keyword(rest[0]) {
 		asked.Index = rest[0]
 		rest = rest[1:]
 		read += ", index " + quoted(asked.Index)
@@ -386,6 +400,23 @@ func showResult(action string, result store.Result, out io.Writer) {
 		// say which. An operator who typed a limit of 5000 and reads "4 rows"
 		// has found the missing file, not a working one.
 		fmt.Fprintf(out, "  %d rows\n", result.Count)
+
+	case store.ActionDeleteRange:
+		// How many went, always, including zero — an access that destroyed
+		// nothing is a fact, and an absent line would read as a success
+		// nobody counted.
+		fmt.Fprintf(out, "  %d removed\n", result.Changed)
+		// Then where it got to, which with the "and more" line below is the
+		// cursor: the next line an operator types is the same one with
+		// `after <this key>` in place of `from`.
+		if result.Key != nil {
+			encoded, err := json.Marshal(result.Key)
+			if err != nil {
+				fmt.Fprintf(out, "  %v\n", err)
+			} else {
+				fmt.Fprintf(out, "  last %s\n", encoded)
+			}
+		}
 
 	default:
 		if len(result.Rows) == 0 {

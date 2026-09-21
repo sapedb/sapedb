@@ -130,6 +130,21 @@ func (s *Store) ceiling(operation Operation, within *costs) (int, error) {
 		}
 		return 1, nil
 
+	case ActionDeleteRange:
+		// Its declared limit, not one, and the difference from the two above
+		// is the point. A count and a hashRange walk many rows and hand back
+		// a single answer, so what they contribute to an enclosing batch's
+		// declared sum is one. A deleteRange TOUCHES every row it walks: it
+		// reads each document, deletes its entries, adjusts its rollups and
+		// writes a log entry. N5 keeps the declared limit an upper bound on
+		// how many times an operation touches the database, so the honest
+		// number here is the limit itself.
+		if operation.Limit <= 0 {
+			return 0, fmt.Errorf("%w: %q is a deleteRange with no declared limit, so how many rows it may remove is decided by the data rather than by the declaration",
+				ErrDeclaration, operation.Name)
+		}
+		return operation.Limit, nil
+
 	case ActionBatch:
 		at := fmt.Sprintf("%s@%d", operation.Name, operation.Version)
 		if total, done := within.known[at]; done {
@@ -181,7 +196,12 @@ func (s *Store) ceiling(operation Operation, within *costs) (int, error) {
 // this package describing a mechanism it does not have.
 func (s *Store) keyTypeOf(operation Operation) (string, error) {
 	switch operation.Action {
-	case ActionInsert, ActionPut, ActionUpdate, ActionDelete:
+	case ActionInsert, ActionPut, ActionUpdate, ActionDelete, ActionDeleteRange:
+		// A deleteRange leaves one behind too — the last key it removed. It
+		// is named here for completeness rather than for use: a step may
+		// only take a value from an earlier step whose ceiling is one, and a
+		// deleteRange's ceiling is its declared limit, so a declaration that
+		// tried would be refused where it was written.
 		collection, err := s.Collection(operation.Collection)
 		if err != nil {
 			return "", err

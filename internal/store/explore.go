@@ -16,8 +16,9 @@ import (
 // off — makes the shell a second, more powerful interface than the one the
 // application uses, available to whoever reaches the port. Here an access
 // somebody types has exactly the shapes an operation may declare: a document
-// by its key, a stretch of a declared index, a count of one, a digest of one.
-// The only difference is when the parameters arrive.
+// by its key, a stretch of a declared index, a count of one, a digest of one,
+// and — since SAPE-32 — the removal of one, bounded by a limit the operator
+// has to say out loud. The only difference is when the parameters arrive.
 //
 // That is not a restriction bolted on afterwards. Explore builds the Operation
 // the typed access would have to be declared as, runs it through
@@ -77,9 +78,27 @@ const MostRows = 1000
 // declared. Which is why there is no field here for anything an operation
 // cannot declare.
 type Access struct {
-	// Kind is "get", "scan", "count" or "hash". Nothing writes: a change to a
-	// production database should be something somebody wrote down, reviewed
-	// and can run again, which is a declared operation.
+	// Kind is "get", "scan", "count", "hash" or "delete".
+	//
+	// "delete" is the first one that writes, and the sentence that used to
+	// stand here — nothing writes, because a change to a production database
+	// should be something somebody wrote down, reviewed and can run again —
+	// is worth keeping in view rather than deleting, because it is still
+	// true of every change this shell should be used for. What SAPE-32 adds
+	// is the case that sentence never covered: the operator holding the
+	// connection at two in the morning, cleaning up a stretch of rows that
+	// should not be there. Writing, reviewing and declaring an operation to
+	// remove them is the right answer when those rows will be there again
+	// next week and the wrong one when they are the incident.
+	//
+	// It is not a hole in the rule, for the same reason none of the reads
+	// are: a typed delete is the Operation it would have to be declared as,
+	// held to validateOperation, run down perform() like any other, and
+	// handed back by `declare` so that cleaning up ends in something
+	// committable. Nothing can be typed here that could not be written down.
+	// And every one of its removals is in the change log under the operator's
+	// name, which is more than the alternative — an operator with the
+	// database file and a text editor — leaves behind.
 	//
 	// This is the shell's word for the access, not the store's word for the
 	// action, and for the first three the two happen to be spelled the same.
@@ -148,14 +167,26 @@ func (s *Store) Explore(caller Caller, access Access) (Operation, Result, error)
 	// read would be a second copy of the database, growing fastest exactly
 	// when somebody is investigating, and it would carry those documents into
 	// every replica and every change feed.
-	if _, err := s.record(Change{
-		Kind:       ChangeRead,
-		Collection: access.Collection,
-		Key:        access.Key,
-		Operation:  &operation,
-		By:         Attribution{Operation: "explore", Actor: caller.Actor},
-	}); err != nil {
-		return Operation{}, Result{}, err
+	//
+	// Not written when the access left entries of its own. A typed delete
+	// records one ChangeDelete per row it removed, each already carrying the
+	// operation this access was and the operator who ran it, so a
+	// ChangeRead on top would be a second entry, of a kind that says "read",
+	// describing the same event — and it would make a typed delete's log
+	// differ from a declared one's for no reason a reader could use. A
+	// delete that removed nothing still lands here, which is right: an
+	// operator pointing this at a stretch and finding it already empty is a
+	// fact somebody may want back.
+	if result.Changed == 0 {
+		if _, err := s.record(Change{
+			Kind:       ChangeRead,
+			Collection: access.Collection,
+			Key:        access.Key,
+			Operation:  &operation,
+			By:         Attribution{Operation: "explore", Actor: caller.Actor},
+		}); err != nil {
+			return Operation{}, Result{}, err
+		}
 	}
 	if err := s.Commit(); err != nil {
 		return Operation{}, Result{}, err
@@ -214,8 +245,32 @@ func (s *Store) asOperation(access Access) (Operation, error) {
 		}
 		operation.Limit = access.Limit
 
+	case "delete":
+		operation.Action = ActionDeleteRange
+		// No index, for the reason validateOperation gives: a deleteRange
+		// removes a stretch of keys, and reading access.Index here would be
+		// carrying a word to a refusal it could have been spared.
+		operation.From = endpoint(access.From)
+		operation.To = endpoint(access.To)
+
+		// Asked for rather than capped, and this is the third answer the
+		// shell's limit rule has given to three actions.
+		//
+		// A scan and a count are capped at MostRows when an operator does
+		// not say, because a capped read still answers: a page, and a flag
+		// saying there was more. A hash is asked for its limit because a
+		// capped hash does not answer at all. This is asked for a third
+		// reason, and the sharpest of the three: a capped delete would
+		// answer perfectly well, and the answer would be that this shell
+		// picked how many of somebody's rows to destroy because they did not
+		// say. Silence is not a number here.
+		if access.Limit <= 0 {
+			return Operation{}, fmt.Errorf("%w: a delete says how many rows it may remove — this is the one access that destroys what it touches, and a limit this shell picked for you would be this shell deciding how much of your data goes", ErrDeclaration)
+		}
+		operation.Limit = access.Limit
+
 	default:
-		return Operation{}, fmt.Errorf("%w: a shell can get, scan, count or hash, not %q", ErrDeclaration, access.Kind)
+		return Operation{}, fmt.Errorf("%w: a shell can get, scan, count, hash or delete, not %q", ErrDeclaration, access.Kind)
 	}
 
 	// Named after what it does, because this is a draft of a declaration and a

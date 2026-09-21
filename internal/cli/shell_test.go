@@ -146,7 +146,11 @@ func TestAShellRefusesWhatItDoesNotUnderstand(t *testing.T) {
 		{`scan books limit "ten"`, `whole number`},
 		{`scan books from`, `from what?`},
 		{`scan books fields`, `fields what?`},
-		{`delete books "b1"`, `there is no "delete"`},
+		// `delete` is a command now (SAPE-32), and it removes a stretch of
+		// keys rather than one document — so a bare key after the
+		// collection is not an index the way it would be in a scan, and
+		// the refusal says which command it was read as.
+		{`delete books "b1"`, `there is no "\"b1\"" in a delete`},
 		{`put books "b1"`, `there is no "put"`},
 		{`db.books.find({})`, `there is no "db.books.find({})"`},
 

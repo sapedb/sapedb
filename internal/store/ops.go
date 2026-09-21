@@ -57,6 +57,27 @@ const (
 	// limit is counted while it walks rather than taken on trust: see
 	// hashRange in digest.go.
 	ActionHashRange = "hashRange"
+
+	// ActionDeleteRange is the eleventh, and the second thing in this store
+	// that walks a range at run time — the first that WRITES while it walks:
+	// a stretch of keys removed in key order, up to the number the
+	// declaration says.
+	//
+	// The name is the one thing about it most likely to mislead, so the cost
+	// is written here rather than left to be discovered. This is not a
+	// truncation of a keyspace and it is not cheap. Removing one document
+	// reads it (its index entries are derived from its contents), deletes
+	// every one of those entries, adjusts every rollup it contributed to,
+	// removes the document, and records a change. So one run costs
+	//
+	//	limit × (one document read + its index entries + its rollup
+	//	         contribution + one log entry)
+	//
+	// which is linear in limit with every unit bounded — which is exactly
+	// what makes it declarable, and exactly why the log grows by one entry
+	// per row rather than by one per call. See deleteRange in
+	// deleterange.go.
+	ActionDeleteRange = "deleteRange"
 )
 
 // How a value is read before it reaches the digest, as an operation writes it
@@ -424,6 +445,15 @@ type Result struct {
 	// Truncated says the scan stopped at its declared limit and there was
 	// more. A caller that does not look at this is reading a partial answer as
 	// a whole one, so it is a field rather than a silence.
+	//
+	// A deleteRange sets it for the same reason and with the same meaning:
+	// it removed the number it was allowed to remove and there were more
+	// keys in the stretch. Together with Key — the last key it removed — it
+	// is the cursor the next call starts after, which is what lets a
+	// thousand rows go in pages. This is the field that makes a stopped
+	// deleteRange distinguishable from a finished one, and it is why that
+	// action stops and says so where a hashRange stops and refuses: a digest
+	// has nowhere to carry "there was more", and this does.
 	Truncated bool `json:"truncated,omitempty"`
 	// Repeated is the log entry a write id had already produced, when this call
 	// was a retry of a write that had already landed. Nothing was written
@@ -812,7 +842,25 @@ func (s *Store) validateOperation(operation *Operation) error {
 			return err
 		}
 
-	case ActionScan, ActionCount, ActionHashRange:
+	case ActionScan, ActionCount, ActionHashRange, ActionDeleteRange:
+		// Key order, and only key order, for a deleteRange, for reasons that
+		// are not the hashRange's below and land in the same place.
+		//
+		// An index is a second order over the same rows, and removing a
+		// document removes every index entry it has — so "delete this
+		// stretch of by_author" is not a stretch of documents at all: an
+		// array index spreads one document over several entries, so a
+		// stretch of it can name half a document, and a tie in an index is
+		// no order within itself, so which rows a limit stops at would
+		// depend on nothing the declaration wrote down. Key order is the one
+		// order in which "up to N of them, and here is the last one" is a
+		// sentence with one meaning — which is also what makes the answer a
+		// cursor somebody can page with.
+		if operation.Action == ActionDeleteRange &&
+			operation.Index != "" && operation.Index != ClusteredIndex {
+			return fmt.Errorf("%w: a deleteRange removes a stretch of %q in key order, and %q is an index — removing a document removes all of its entries, an array index spreads one document over several of them, and a tie in an index has no order of its own, so which rows a limit stopped at would not be decided by this declaration",
+				ErrDeclaration, operation.Collection, operation.Index)
+		}
 		// Key order, and only key order, for a hashRange. The answer is the
 		// SHA-256 of the values joined with nothing between them, so the
 		// order they are joined in IS the answer — and an index is a second
@@ -885,6 +933,16 @@ func (s *Store) validateOperation(operation *Operation) error {
 		// it read four rows or forty million. Nothing about what comes back
 		// says what it cost, so the declaration is the only place it can be
 		// said.
+		//
+		// All four of them, now. A deleteRange is the one where the number
+		// is not a ceiling on what comes back but a ceiling on what is
+		// destroyed, and where the cost is not only this call's: each row
+		// removed writes a change-log entry that every follower replays and
+		// that no operator can cap today (ISS-23). "How many rows may this
+		// remove" is therefore the single most consequential number in this
+		// store, and there is no honest default for it — a defaulted one
+		// would be this store deciding on somebody's behalf how much of
+		// their data goes.
 		if operation.Limit <= 0 {
 			if operation.Action == ActionCount {
 				return fmt.Errorf("%w: a count must declare how far it walks — it hands back a number rather than rows, so the walk is the whole of what it costs", ErrDeclaration)
@@ -892,8 +950,23 @@ func (s *Store) validateOperation(operation *Operation) error {
 			if operation.Action == ActionHashRange {
 				return fmt.Errorf("%w: a hashRange must declare how far it walks — it hands back thirty-two bytes whatever it read, so the walk is the whole of what it costs and the answer never reveals it", ErrDeclaration)
 			}
+			if operation.Action == ActionDeleteRange {
+				return fmt.Errorf("%w: a deleteRange must declare how many rows it may remove — the number bounds what is destroyed and how many log entries every follower replays, and there is no default this store may pick on an operator's behalf", ErrDeclaration)
+			}
 			return fmt.Errorf("%w: a scan must declare how many rows it may return", ErrDeclaration)
 		}
+		// The same refusal, in the same words, that a scan, a count and a
+		// hashRange already get — deliberately matched rather than decided
+		// again. The ticket flagged "may one call cross a partition
+		// boundary" as a decision rather than an implementation detail, and
+		// it is a decision this store already made: a walk that crosses
+		// partitions is several indexes one after another, which is key
+		// order for a time-partitioned collection and hash order — no order
+		// — for a hash-partitioned one. A deleteRange needs that order for a
+		// stronger reason than a scan does, not a weaker one: without it,
+		// "up to N in key order, and here is the last key" is not a cursor
+		// and a second page would remove rows from wherever the hash
+		// happened to put them.
 		if err := scanAcross(collection, operation); err != nil {
 			return err
 		}
@@ -921,6 +994,13 @@ func (s *Store) validateOperation(operation *Operation) error {
 			if len(operation.Projection) > 0 {
 				return fmt.Errorf("%w: a hashRange hands back a digest rather than rows, so a projection on one names fields nobody will ever be shown", ErrDeclaration)
 			}
+		}
+
+		// The same rule, for the same reason, for the action that hands back
+		// a count and a cursor. Refused rather than ignored while nothing
+		// has declared one yet.
+		if operation.Action == ActionDeleteRange && len(operation.Projection) > 0 {
+			return fmt.Errorf("%w: a deleteRange removes rows rather than returning them, so a projection on one names fields nobody will ever be shown", ErrDeclaration)
 		}
 
 	case ActionBatch:
@@ -1017,6 +1097,15 @@ func (s *Store) validateOperation(operation *Operation) error {
 			// two digests of the same bytes they wanted, which is exactly
 			// what "how a file was split does not change its hash" is for.
 			why = "joins its values in key order, and reading them back to front is a different digest of the same bytes"
+		case ActionDeleteRange:
+			// The sharpest version of this rule, because here the word does
+			// not change what comes back — it changes which rows still
+			// exist. With a limit smaller than the stretch, the two
+			// directions remove the two opposite ends of it, so a
+			// caller-chosen direction would be a caller deciding which half
+			// of somebody's data goes. That is precisely the decision a
+			// declaration exists to have already made.
+			why = "removes rows in key order, and reading the stretch back to front under a limit would let the caller choose which end of it is destroyed"
 		}
 		return fmt.Errorf("%w: a %s %s", ErrDeclaration, operation.Action, why)
 	}
@@ -1374,8 +1463,15 @@ func scanAcross(collection *Collection, operation *Operation) error {
 
 	where := fmt.Sprintf("%q is divided %s", collection.spec.Name, describePartition(divided))
 
+	// Four actions reach this now — scan, count, hashRange and deleteRange —
+	// so the sentence says "an ordered walk" rather than "a scan". The rule
+	// is unchanged and deliberately so: whether one call may cross a
+	// partition boundary was decided here once, and each action that walks
+	// inherits that answer rather than arguing it again. It binds hardest on
+	// the deleteRange, where the order is what makes the last key removed a
+	// cursor rather than an arbitrary row.
 	if divided.By == ByHash {
-		return fmt.Errorf("%w: %s, so a scan of it would run over partitions in hash order, which is no order; read it by key",
+		return fmt.Errorf("%w: %s, so an ordered walk of it would run over partitions in hash order, which is no order; reach it by key",
 			ErrDeclaration, where)
 	}
 

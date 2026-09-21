@@ -230,6 +230,16 @@ func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
 			// A synthetic {count, group} row, not the document — see the
 			// Envelope doc above.
 
+		case ActionDeleteRange:
+			// Walks the clustered index — validateOperation refuses any
+			// other — and returns a count and a cursor rather than rows, so
+			// nothing escapes. The Limit above is ceiling(), which for this
+			// action is the declared limit, because that is what it touches
+			// rather than what it hands back: the one number a caller
+			// weighing "may I run this" has to read is how many rows it may
+			// destroy.
+			indexes[indexName(op.Index)] = true
+
 		case ActionInsert, ActionPut, ActionUpdate, ActionDelete:
 			// No rows returned.
 		}

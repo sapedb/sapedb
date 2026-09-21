@@ -157,6 +157,21 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 			return err
 		}
 
+	case ActionDeleteRange:
+		// The same bounds() again, for the same reason, and here it also
+		// buys the refusal of a From that sorts after To — which on a
+		// destructive action is worth more than on a read: a backwards
+		// stretch that quietly read as empty would report "removed nothing,
+		// nothing more to do" about a range somebody meant to clear, and the
+		// rows would still be there.
+		within, err := bounds(operation, values)
+		if err != nil {
+			return err
+		}
+		if err := s.runDeleteRange(by, collection, operation, within, result); err != nil {
+			return err
+		}
+
 	case ActionInsert, ActionPut:
 		document, err := build(operation.Document, values)
 		if err != nil {
@@ -282,7 +297,7 @@ func writes(action string) bool { return Writes(action) }
 // that trusted it lets a write through.
 func Writes(action string) bool {
 	switch action {
-	case ActionInsert, ActionPut, ActionUpdate, ActionDelete, ActionBatch:
+	case ActionInsert, ActionPut, ActionUpdate, ActionDelete, ActionBatch, ActionDeleteRange:
 		return true
 	}
 	return false

@@ -155,16 +155,7 @@ func (c *Collection) Walk(visit func(key any, document map[string]any) bool) err
 // along it takes the same bounds.
 func (c *Collection) walkRange(within Range, visit func(key any, document map[string]any) bool) error {
 	prefix := c.documents()
-	// Missing here is a formality, not a real choice: keys.Encode only reads
-	// field.Missing for the tag it writes for keys.Absent, and the one place
-	// that produces keys.Absent is entriesForIndex (collection.go), for an
-	// INDEXED field a document is missing — the primary key is never absent, a
-	// document cannot exist without one. So whichever of MissingSkip,
-	// MissingFirst or MissingLast is written here encodes to the same byte
-	// today. Kept as MissingSkip — the field's own zero value — for no reason
-	// stronger than that, and the day the primary key can be optional this
-	// stops being true.
-	fields := []Field{{Path: c.spec.Key.Path, Type: c.spec.Key.Type, Missing: MissingSkip}}
+	fields := c.clusteredFields()
 
 	return c.walk(within, prefix, fields, func(key, value []byte) bool {
 		primary, rest, err := keys.Decode(key[len(prefix):], keys.Field{})
@@ -177,6 +168,61 @@ func (c *Collection) walkRange(within Range, visit func(key any, document map[st
 		}
 		return visit(primary, document)
 	})
+}
+
+// clusteredFields describes the primary key as the one field the clustered
+// index is over, which is what bounds a walk of it.
+//
+// Missing here is a formality, not a real choice: keys.Encode only reads
+// field.Missing for the tag it writes for keys.Absent, and the one place that
+// produces keys.Absent is entriesForIndex (collection.go), for an INDEXED
+// field a document is missing — the primary key is never absent, a document
+// cannot exist without one. So whichever of MissingSkip, MissingFirst or
+// MissingLast is written here encodes to the same byte today. Kept as
+// MissingSkip — the field's own zero value — for no reason stronger than
+// that, and the day the primary key can be optional this stops being true.
+//
+// Pulled out of walkRange when walkKeys arrived, so that the two walks of the
+// clustered index bound themselves with the same description rather than with
+// two copies of it that agree until somebody edits one.
+func (c *Collection) clusteredFields() []Field {
+	return []Field{{Path: c.spec.Key.Path, Type: c.spec.Key.Type, Missing: MissingSkip}}
+}
+
+// walkKeys is walkRange with the documents left where they are: the primary
+// keys of a stretch, in key order, across every partition.
+//
+// It exists for deleteRange, and the reason it is not walkRange with the
+// document ignored is the cost model that action is declared against. Every
+// row a deleteRange touches costs one document read — the read inside
+// remove(), which has to happen there because a document's index entries are
+// derived from its contents. A walk that also unmarshalled every document on
+// the way past would make that two reads and two unmarshals per row, which is
+// twice the number the declaration says, for a value nothing would look at.
+//
+// The decode failure is carried out rather than swallowed, which is the one
+// place this differs from walkRange: walkRange stops silently on a key it
+// cannot decode, and for a read the worst that does is return fewer rows. A
+// delete that stopped silently would report "removed three, nothing more to
+// do" about a stretch whose fourth key is damaged, and the caller would page
+// forward past it.
+func (c *Collection) walkKeys(within Range, visit func(key any) bool) error {
+	prefix := c.documents()
+
+	var damaged error
+	err := c.walk(within, prefix, c.clusteredFields(), func(key, value []byte) bool {
+		primary, rest, err := keys.Decode(key[len(prefix):], keys.Field{})
+		if err != nil || len(rest) != 0 {
+			damaged = fmt.Errorf("%w: a primary key of %q does not decode, so the stretch after it cannot be walked",
+				ErrDamaged, c.spec.Name)
+			return false
+		}
+		return visit(primary)
+	})
+	if err != nil {
+		return err
+	}
+	return damaged
 }
 
 // stretch turns a Range into the two byte positions that bound the walk:

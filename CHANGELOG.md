@@ -64,6 +64,128 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **`deleteRange`: a stretch of keys removed in key order, with a ceiling the
+  host counts (SAPE-32).** Asked whether a batch could remove a few thousand
+  rows atomically, this project's planner said no, and gave as the reason that
+  `steps` is a field on the declaration so a batch's shape is fixed when it is
+  declared. That is true and it was the wrong reason: it describes how the
+  **driver** models a batch and says nothing about what the **engine** may do.
+  The proof was already here — a rollup *is* the engine computing, kept
+  incrementally, and the driver never lets anybody write that as an expression,
+  it lets them declare *this rollup*. Engine computes, driver declares, and the
+  promise is intact. This is the same trade on a second primitive.
+
+  **It is not a cheap truncation, and the name says it is.** Reading
+  `Collection.remove`: each document has to be READ before it can go, because
+  its index entries are derived from its contents; then every entry is deleted,
+  then `contribute(tree, document, -1)` adjusts every rollup it fed, then the
+  document itself goes, then the change is recorded. So one run costs
+  `limit × (one document read + its index entries + its rollup contribution +
+  one log entry)` — linear in `limit`, every unit bounded, which is exactly what
+  makes it declarable and exactly why anybody who reads the name and assumes
+  otherwise will be surprised by the log rather than by the latency. The
+  acceptance test that would catch a fast path skipping `contribute` is the one
+  that deletes the identical rows one at a time in a second store and compares
+  both stores' rollups and index entries afterwards: a range delete that leaves
+  an index entry behind is a corruption that reads as success.
+
+  **N deletions write N log entries, and not batching them is the answer
+  rather than a thing left undone.** The entries this writes are *exactly* the
+  entries the same deletes produce one at a time — same kind, one per key, same
+  attribution — measured field for field, with a second assertion that nothing
+  of any other kind was written among them. That is what lets a follower replay
+  a range delete understanding nothing it did not already understand, and it is
+  why one entry carrying a key list was not built: a new log shape is a thing
+  every follower, every dump and every subscriber has to learn before the first
+  one can be written. What this does do is make **ISS-23** matter more rather
+  than fix it — no operator can cap retention, so removing a large file's worth
+  of rows grows the log by that much. That is the reason the limit here is
+  required with no default: the number bounds what is destroyed *and* what
+  every follower replays, and a default would be this store deciding on
+  somebody's behalf how much of their data goes.
+
+  **The ceiling is counted, not trusted — the same rule `hashRange` wrote
+  down.** Against one counter, per **run** of the operation and not per
+  underlying call; what is counted is rows removed. A partitioned collection is
+  where that distinction is visible without anybody writing a loop, because one
+  run is several walks of several files: six rows over two partitions under a
+  limit of five removes five and says more remain, where a counter restarted
+  per file would see three and three and report that it had finished. That is
+  the W7 shape (`pipelines/tasks/0071`: an operation declaring `limit 50`,
+  correctly sandboxed and correctly signed, served **50,000,000 rows** in one
+  call, because the host checked every call and never the total — a signature
+  proves whose binary it is, a sandbox proves it does not escape, neither
+  proves what it costs), measured here on the action where getting it wrong
+  destroys data rather than returning it.
+
+  **At the ceiling it stops and says so, where a `hashRange` stops and
+  refuses**, and the difference is deliberate. SAPE-34 refuses because a digest
+  of part of a range is thirty-two bytes in the same field as a digest of all
+  of it: there is no shorter honest answer, so there is no answer. That
+  argument is about the shape of the answer and does not survive the move here.
+  This one hands back how many went, the last key removed, and whether more
+  remain — `Changed`, `Key` and the `truncated` a scan already sets — so its
+  answer says that it is short, which is the property the refusal exists to
+  supply when it is missing. It also has to be this way for the ticket's own
+  first criterion to be satisfiable: paging a thousand rows needs the last key
+  to come *back*, and the rows are already gone by the time a refusal could be
+  raised, so refusing would not un-remove them, only hide which ones went.
+
+  **Key order only, and the partition rule is the existing one.** An index is
+  refused: removing a document removes every entry it has, an array index
+  spreads one document over several of them, and a tie in an index has no order
+  of its own, so which rows a limit stopped at would not be decided by the
+  declaration. A direction is refused for the sharpest version of the reason a
+  `count`'s is — under a limit the two directions remove the two opposite ends
+  of the stretch, so a caller-chosen direction would be a caller choosing which
+  half of somebody's data goes. And a hash-partitioned collection is refused by
+  `scanAcross`, the same answer `scan`, `count` and `hashRange` already get,
+  matched rather than decided again; it binds harder here, because without key
+  order "up to N, and here is the last key" is not a cursor at all.
+
+  **Both layers.** The declared operation takes `from` and `to` from the caller
+  and carries the limit itself; `delete <collection> [from …] [to …] limit <n>`
+  does the same thing at the operator shell, prints how many went, the last key
+  as JSON to paste after `after` on the next line, and the `… and more` sentence
+  `scan` already prints. The two are measured against each other on the same
+  range, because two spellings of one primitive that disagree is worse than one
+  spelling — and they cannot drift, because the typed one is not a second path:
+  `Explore` builds the Operation it would have to be declared as, holds it to
+  `validateOperation`, runs it through `perform()` and hands the draft back.
+  This is the **first typed access that writes**, and the sentence that used to
+  stand in `Access.Kind`'s doc — nothing writes — is kept in view there rather
+  than deleted, because it is still true of every change this shell should be
+  used for. The limit is asked for rather than capped at `MostRows`, which is
+  the third answer that rule has now given to three actions: a capped scan
+  still answers, a capped hash does not answer at all, and a capped delete
+  would answer perfectly well — the answer being that this shell picked how
+  many of somebody's rows to destroy.
+
+  **What a client has to learn.** An eleventh action name, `"deleteRange"`. No
+  new fields on a declaration, no new fields on a result — `changed`, `key` and
+  `truncated` are the ones a delete and a scan already use — and **no new
+  refusal code**, because nothing here refuses in a way the existing table does
+  not already name. `fixtures/frames.json` needs nothing: it carries frame
+  numbers and request body shapes and deliberately leaves `store.Operation`,
+  `store.Spec` and `store.Access` opaque. The one thing that is genuinely new
+  to a client is that `store.Writes` now calls this a write, so a follower
+  refuses it and the server takes the write lock for it.
+
+  **One cost this cannot hide.** A visitor cannot delete from the tree it is
+  being walked by — `btree.ascend` decodes a branch page once and then reads
+  the children it decided on, and a delete partway through can merge and free
+  exactly those pages — so the keys are collected during the walk and removed
+  after it, which is what `store.go`'s own byte-level `deleteRange(prefix)` has
+  always done for the same reason. That means this holds one primary key per
+  row it is about to remove, where a `hashRange` holds one row at a time and
+  drops it. The memory is bounded by the declared limit, which is the number
+  the declaration exists to say — but it grows with that number, and a limit of
+  ten million is ten million keys in memory.
+
+  **Not in this one:** capping or compacting the change log (ISS-23), any new
+  log entry shape, deleting by anything other than a key range, and dropping a
+  whole collection — which is `Store.Drop`, and exists.
+
 - **`hashRange`: the SHA-256 of a stretch of keys, without the stretch leaving
   the server (SAPE-34).** The values of a key range, in key order, joined with
   nothing between them, answered as thirty-two bytes. It is how an application
