@@ -216,8 +216,9 @@ type Term struct {
 	// — only "key" for now, which is what an order needs to give its payment.
 	//
 	// This is the whole of the dataflow between steps, and it is deliberately
-	// this small: anything richer is an expression language, which is the
-	// thing this store exists not to have.
+	// this small: anything richer is an expression language, and an expression
+	// is the one thing a caller is promised never to have to write. The engine
+	// underneath could carry more; this field is where that promise is kept.
 	Step  string `json:"step,omitempty"`
 	Field string `json:"field,omitempty"`
 }
@@ -595,14 +596,15 @@ func (s *Store) validateOperation(operation *Operation) error {
 			if term.Field != "key" {
 				return fmt.Errorf("%w: %s asks a step for %q, and a step gives only its key", ErrDeclaration, where, term.Field)
 			}
-			// N4, and it is the one rule here that decides what this product
-			// is rather than tidying it up.
+			// N4, and it is the rule that keeps the promise rather than
+			// tidying the code.
 			//
 			// A step runs exactly once. Taking a value from a step that may
 			// hand back many rows is how that stops being true: "run this once
 			// for each row that one returned" is a for loop, written in JSON,
-			// and a for loop is the first half of the expression language this
-			// store exists not to have. The ceiling would stop being a sum and
+			// and a for loop is the first half of an expression language. What
+			// breaks is not the engine's dignity but a promise somebody relies
+			// on: the ceiling would stop being a sum and
 			// become a product, and a product of three fifties is a hundred
 			// and twenty five thousand rows behind three numbers none of which
 			// makes a reader look twice.
