@@ -1,5 +1,27 @@
 # Do namespaces exist? (SAPE-9)
 
+> **DECIDED: yes. Operations get namespaces, and they shipped before 1.0.0.** The owner chose option C plus
+> option D's ownership rule; this document recommended option A, and that recommendation was not taken.
+> Everything below is kept as the record of what was argued, not as a description of the code. See the
+> SAPE-9 entry in `CHANGELOG.md` for what landed and `COMPATIBILITY.md` section 5 for what is now frozen.
+>
+> Three claims below are no longer true of the code, and each is marked where it appears:
+>
+> 1. **"Any separator a convention might pick is already legal"** — `:` is no longer a separator a
+>    convention may pick freely. It is *the* separator. `acme:orders.recent` is still accepted, and now
+>    means the namespace `acme`; `a:b:c`, `:foo`, `foo:` and a namespace with a space in it are refused.
+>    Every name with no `:` is unchanged, which is the whole reason the decision could be made this way.
+> 2. **"Option C reaches back into declarations inside database files"** — as built, it does not. A flat
+>    name is the *unnamed namespace*, so every declaration already on a disk keeps resolving and keeps
+>    behaving exactly as section 1 measures. What option C actually cost was the right to refuse a
+>    two-colon name in a 1.1, which is why it had to be spent before the tag.
+> 3. **"A namespace bound to a signing identity needs an identity that does not exist"** — SAPE-10 landed,
+>    and SAPE-28 (`sapedb install`) made it reachable, so it exists. `store.Caller.Signer` carries the key
+>    and a claim records which KIND of identity holds it.
+>
+> What was NOT built, and is debt: renaming a namespace, transferring a claim, listing claims as a
+> first-class command, wire-level trust configuration, and carrying claims through a dump.
+
 **The question:** two vendors both want the operation name `orders.recent` in one customer's database, and
 today the second one to declare it silently becomes the one every unversioned call reaches — so does 1.0.0
 ship flat names, or does a name get a namespace?
@@ -150,6 +172,12 @@ func usableName(name string) error {
 `acme:orders.recent`, `@acme/orders.recent` and a 128-byte name, and all six are accepted; the empty name, a
 129-byte name and a name with a zero byte are refused. Two consequences: any separator a convention might
 pick is already legal, and **every one of those names is valid in 1.0**.
+
+> **Still true, and it is what the decision turned on.** That test is unedited and still passes: all six
+> names are accepted by the shipped code. What changed is that `:` now *means* something, so the first
+> consequence above no longer holds for `:` alone — see `SplitOperationName` in
+> `internal/store/namespace.go` and `TestWhatAnOperationNameMayBeNow` beside it, which repeats those six
+> names in its accepted list precisely so that this paragraph cannot quietly stop being true.
 
 ### One more thing found on the way, reported not fixed
 
@@ -312,3 +340,14 @@ of the log entry that knows, or the `usableName` rules change.
 If the product decides to make collisions refusable, `TestASecondDeclarationOfANameTakesOverEveryUnversionedCall`
 goes red and says so in its own failure message. That is the intended way to find out which claims here the
 decision overturned.
+
+> **What happened when the decision was made.** None of the five went red, and that is the finding rather
+> than a relief: the decision made collisions refusable *in a named namespace*, and every name in this file
+> is flat. The other half of the scenario is measured beside it, in
+> `TestTwoVendorsInTheirOwnNamespacesCannotTakeEachOthersNameOver`
+> (`internal/store/namespace_test.go`) — the same two vendors, the same two declarations, each in a
+> namespace of its own — and it exercises `DeclareOperation` and `Invoke` rather than comparing name
+> strings, because the claim is about what the first vendor's caller gets back. Deliberately making a flat
+> name claim the unnamed namespace turns
+> `TestASecondDeclarationOfANameTakesOverEveryUnversionedCall` red, which is the check that the two tests
+> are measuring two different things.

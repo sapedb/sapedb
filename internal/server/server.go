@@ -1252,6 +1252,17 @@ func codeFor(err error) string {
 		{store.ErrNoIndex, "no_index"},
 		{store.ErrNoKey, "no_key"},
 		{store.ErrDeclaration, "declaration"},
+
+		// SAPE-9. A namespace refusal is its own code and not "declaration",
+		// because it is the one refusal on this path that is not about the
+		// declaration at all — the operation is perfectly well formed and
+		// somebody else owns the name. A client that saw "declaration" would
+		// tell its author to fix their operation; what they have to do is pick
+		// a namespace of their own, or find out who holds this one. It is also
+		// not left to fall through to "failed", which is precisely the bug
+		// ISS-21 records.
+		{store.ErrNamespace, "namespace"},
+
 		{store.ErrDamaged, "damaged"},
 		{store.ErrIncompatible, "incompatible"},
 

@@ -383,7 +383,14 @@ func install(db *store.Store, opts options, path string, out io.Writer) error {
 	// collection that a later refusal un-declared would be the only surviving
 	// record of something that never happened.
 	var progress bytes.Buffer
-	by := store.Caller{Actor: installedBy(b, key, label)}
+	// Signer as well as Actor, and they are not the same string on purpose.
+	// Actor is the sentence the change log gets, which names the bundle, its
+	// version, the key and the operator's label for it, because a log is read
+	// by a person. Signer is the key on its own, because it is compared by a
+	// machine: it is what a namespace claim is recorded against, and a claim
+	// recorded against a sentence would stop matching the moment the operator
+	// renamed the key in their trust list. See store.Caller.Signer.
+	by := store.Caller{Actor: installedBy(b, key, label), Signer: key}
 	fmt.Fprintf(&progress, "installing bundle %q version %q, signed by %s, trusted here as %q\n",
 		b.Name, b.Version, key, label)
 

@@ -623,3 +623,74 @@ func TestVerifyNeedsNoDatabaseAndNoSecret(t *testing.T) {
 	}
 	assertTreeUnchanged(t, setup.dir, before)
 }
+
+// namespacedPack is pack() with both operations moved into a namespace of the
+// author's own (SAPE-9). The namespace is "ledger", which is neither the
+// account ("acme") nor the operator's label for the key, so a claim recorded
+// against it cannot be satisfied by something else in the tree spelling the
+// same.
+func namespacedPack() bundle.Bundle {
+	b := pack()
+	b.Operations[0].Name = "ledger:postings.get"
+	b.Operations[1].Name = "ledger:postings.by_account"
+	return b
+}
+
+// TestABundleClaimsItsNamespaceForItsKeyNotForTheAccount is the guard on the
+// one line of this package SAPE-9 changed: install passes the signing key as
+// store.Caller.Signer, so a namespace installed from a bundle belongs to the
+// key that signed it and not to whoever ran the command.
+//
+// It is measured through the commands rather than by reading the Caller,
+// because "the field is set" and "the namespace is protected" are different
+// claims and only the second one is worth anything. `apply` runs as the
+// account and opens the file from scratch, so what refuses it is a claim that
+// was committed.
+func TestABundleClaimsItsNamespaceForItsKeyNotForTheAccount(t *testing.T) {
+	setup := start(t)
+	public, private := author(t, 16)
+	path := sealedAt(t, namespacedPack(), private)
+
+	if _, errs, status := setup.runWith(trusting("north-star", public), "", "install", path); status != 0 {
+		t.Fatalf("installing: %s", errs)
+	}
+
+	// The known-positive: the account may still declare, both flat and into a
+	// namespace nobody has taken. Without this, the refusal below could be
+	// "apply is broken" rather than "the namespace is held".
+	allowed := setup.write("allowed.json", `{"operations":[
+      {"name": "postings.count_all", "collection": "postings", "action": "count",
+       "index": "by_account", "limit": 100},
+      {"name": "acme:postings.count_ours", "collection": "postings", "action": "count",
+       "index": "by_account", "limit": 100}
+    ]}`)
+	if _, errs, status := setup.run("apply", allowed); status != 0 {
+		t.Fatalf("declaring outside the bundle's namespace was refused: %s", errs)
+	}
+
+	// And the claim: the same operator, into the key's namespace.
+	intruder := setup.write("intruder.json", `{"operations":[
+      {"name": "ledger:postings.get", "collection": "postings", "action": "count",
+       "index": "by_account", "limit": 100}
+    ]}`)
+	out, errs, status := setup.run("apply", intruder)
+	if status == 0 {
+		t.Fatalf("the account declared into the bundle key's namespace and was not refused: %s", out)
+	}
+	for _, want := range []string{"ledger", hex.EncodeToString(public)} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("the refusal does not name %q: %s", want, errs)
+		}
+	}
+	// The key, not the operator's label for it: a claim recorded against a
+	// label would stop matching the moment the operator renamed the key in
+	// their trust list.
+	if strings.Contains(errs, "north-star") {
+		t.Errorf("the claim was recorded against the operator's label rather than the key: %s", errs)
+	}
+
+	// Installing the same bundle again is not a collision with itself.
+	if _, errs, status := setup.runWith(trusting("north-star", public), "", "install", path); status != 0 {
+		t.Fatalf("reinstalling the bundle that holds the namespace was refused: %s", errs)
+	}
+}

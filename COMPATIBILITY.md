@@ -6,7 +6,7 @@ an answer the first person to ask happened to assume.
 
 It is deliberately short. A policy nobody reads is a policy nobody keeps.
 
-## Four frozen surfaces
+## Five frozen surfaces
 
 Each one names the file and the symbol that holds its current value, and the test that keeps
 this document from drifting away from the code. Symbols are cited rather than line numbers,
@@ -88,6 +88,35 @@ that happens in a refactor.
 
 A 1.x release **may** add an exported name. It **may not** remove one, change a signature, or
 change what a method does to the database.
+
+### 5. The operation name grammar
+
+What an operation may be called. It is a surface of its own rather than a line under
+"Declaration semantics", because it is the one rule a **caller** depends on as much as a
+declarer: a name is what an `invoke` frame carries, and a name that stops resolving is an
+application that stops working without anything in it having changed.
+
+| | |
+| --- | --- |
+| Where | `internal/store/namespace.go` — `SplitOperationName` and `NamespaceSeparator`; `internal/store/spec.go` — `usableName` |
+| Today | `namespace:name`, at most one `:`; no `:` is the unnamed namespace; a namespace holds letters, digits, `.`, `-`, `_`; the name half is non-empty and holds no zero byte; 128 bytes for the whole thing, separator and namespace included |
+| Enforced by | `TestWhatAnOperationNameMayBeNow` and `TestSplitOperationNameReadsBothHalves` (`internal/store`) |
+
+A 1.x release **may** loosen this: widen the namespace charset, or raise the 128-byte
+ceiling. Both make names that are refused today start working, which breaks nothing that
+exists.
+
+A 1.x release **may not** tighten it — refuse a name 1.0 accepted — or change how a name
+splits, because that changes which declaration an existing caller's `invoke` reaches. In
+particular, **the unnamed namespace stays unowned**: a flat name is first-come-takes-over, a
+second declaration of one wins every unversioned call, and making the empty namespace
+claimable in a 1.x would lock every existing declarer out of their own names.
+
+This one was decided at the last possible moment, and SAPE-9's entry in the CHANGELOG says
+so. Before it, every separator was a legal name — `internal/store/collision_test.go`'s
+`TestAnOperationNameMayHoldAnySeparatorAName` declares `acme:orders.recent` among others and
+all of them are accepted — so under the rule above refusing `a:b:c` in a 1.1 would have been
+forbidden. There is no version of this that arrives after the tag.
 
 Everything under `internal/` is exempt, by the language and by intent. It is not a public
 surface and nothing about it is promised.

@@ -320,6 +320,14 @@ type Caller struct {
 	// is answered from what the first one did rather than applied again, which
 	// is what makes a retry after a lost connection safe.
 	WriteID string
+	// Signer is the ed25519 public key, in hex, of the bundle this call
+	// arrived inside — set by `sapedb install` and by nothing else. It is the
+	// identity a namespace claim is recorded against when it is present, and
+	// it is a separate field from Actor rather than a differently-spelled
+	// Actor because the two are different kinds of fact: this one was checked,
+	// by a signature over exactly the declarations it carried, and Actor is a
+	// name somebody was called at the time. See namespace.go.
+	Signer string
 }
 
 // Result is what running an operation produced.
@@ -366,6 +374,15 @@ type Result struct {
 // what an audit trail is made of.
 func (s *Store) DeclareOperation(caller Caller, operation Operation) (Operation, error) {
 	if err := s.validateOperation(&operation); err != nil {
+		return Operation{}, err
+	}
+
+	// Who may declare into this namespace, before anything is written. A name
+	// in the unnamed namespace — every flat name there has ever been — passes
+	// straight through here and keeps the behaviour the collision tests
+	// measure: the newest version wins and nobody is warned. A named namespace
+	// belongs to whoever declared into it first. See namespace.go.
+	if err := s.claimFor(caller, operation.Name); err != nil {
 		return Operation{}, err
 	}
 
@@ -480,6 +497,15 @@ func (s *Store) validateOperation(operation *Operation) error {
 	normalizeEndpoint(operation.To)
 
 	if err := usableName(operation.Name); err != nil {
+		return fmt.Errorf("operation name: %w", err)
+	}
+	// The namespace half of the name, checked here rather than in
+	// DeclareOperation so that Explore cannot hand back a draft declaration
+	// that could never be declared. usableName runs first and keeps its rules
+	// exactly: the 128-byte ceiling is on the WHOLE name, separator and
+	// namespace included, because raising a published limit quietly is a
+	// different promise from the one 1.0 makes. See namespace.go.
+	if _, _, err := SplitOperationName(operation.Name); err != nil {
 		return fmt.Errorf("operation name: %w", err)
 	}
 

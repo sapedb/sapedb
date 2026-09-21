@@ -5,6 +5,63 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ## Unreleased
 
+### Changed
+
+- **An operation name is now `namespace:name`, and this is a breaking change to
+  what a name means (SAPE-9).** It had to land before 1.0.0 or never: every
+  separator is a legal operation name today — `internal/store`'s
+  `TestAnOperationNameMayHoldAnySeparatorAName` declares `acme:orders.recent`,
+  `orders/recent` and four others and all of them are accepted — and
+  COMPATIBILITY.md section 3 forbids a 1.x release from tightening a rule so
+  that a declaration valid in 1.0 is refused in 1.1. Refusing `a:b:c` in a 1.1
+  would have been exactly that. There is no version of this that arrives after
+  the tag.
+
+  **Every flat name keeps working, unchanged.** A name with no `:` is in the
+  *unnamed namespace*. Nothing about it moved: it resolves the way it always
+  did, a second declaration of one still silently takes over every unversioned
+  call, and `internal/store/collision_test.go` — which measures exactly that —
+  still passes without an edit. The unnamed namespace is the one nobody owns,
+  and it is now documented as that rather than left as an accident.
+
+  **What is refused, and was not before.** More than one `:` in a name; a `:`
+  with either side empty (`:foo`, `foo:`); and a namespace holding anything but
+  letters, digits, `.`, `-` and `_`. A namespace is compared by eye and typed by
+  hand, so permitting arbitrary bytes now is a decision nobody could walk back
+  later. The 128-byte ceiling is on the **whole** name — namespace, separator
+  and name — because a namespace is not a way to get a longer public limit.
+
+  **A named namespace belongs to whoever declared into it first.** Every later
+  declaration into it from anybody else is refused, by name, in a sentence that
+  says who holds it. That is what makes a namespace worth having: two vendors
+  who each pick one can no longer redeclare over each other, and the failure
+  moves from *a silent takeover on the next call* to *the install stops and the
+  customer reads a sentence naming both parties*. Two vendors who both stay in
+  the unnamed namespace are exactly as exposed as they were.
+
+  **The claimant is a kind as well as a string.** A declaration that arrived
+  inside a signed bundle (`sapedb install`) is claimed for the ed25519 key that
+  signed it; anything else is claimed for `Caller.Actor`. Both are stored, so a
+  key and an account that happen to spell the same are two different claimants
+  and not one — the key was checked, over exactly the declarations it carried,
+  and an actor is a name somebody was called at the time.
+
+  **`namespace` is a new refusal code on the wire.** `store.ErrNamespace` has
+  its own row in `internal/server`'s `codeFor` rather than falling through to
+  `failed`, which is the bug ISS-21 is this project's record of, and it is
+  deliberately not `declaration`: a namespace refusal tells its reader to pick a
+  namespace of their own, and `declaration` tells them to fix their operation.
+  This code is **not** in `fixtures/frames.json` — that artifact carries frame
+  numbers, request body shapes and encoding cases, and has never held a failure
+  code table — so no client's copy of it needs syncing for this.
+
+  **Known limitation, not fixed here:** a dump does not carry namespace claims,
+  so a database restored from one comes back with every namespace unclaimed and
+  the first declarer afterwards takes it. `Restore` writes declarations straight
+  into the tree without going through `DeclareOperation`, so a restore is never
+  *refused* by this; it simply forgets who owned what. Adding a claim line to a
+  dump is a dump-format change and belongs to its own ticket.
+
 ### Added
 
 - **A signed bundle can now be checked and installed (SAPE-28).** SAPE-10
