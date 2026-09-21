@@ -611,16 +611,26 @@ built on. Run it, and <code>author</code> is not in the answer.</p>
 Label: `go test &mdash; the envelope, checked against what the operation returns` · what: `verified &mdash; the guard, deliberately broken` · `data-hl="none"`
 
 This is the test with the projection removed from the declaration, to show the check is real.
-The declaration was restored immediately afterwards.
+The removal is made in a throwaway copy of the repository rather than in a checkout, so there
+is nothing to restore afterwards and nothing to forget to restore.
 
 ```
-$ python3 -u mutate.py no-projection && go test . -run TestTheWorkedModule -count=1
-mutated: no-projection
---- FAIL: TestTheWorkedModulesCostEnvelopesSayWhatItActuallyDoes (0.85s)
-    library_live_test.go:390: library:books.by_author lets fields [id on_loan shelf title] escape, and its envelope says []
-    library_live_test.go:434: a row carries fields [author id on_loan shelf title]; its envelope promised [id on_loan shelf title]
+$ mkdir /tmp/guard && git archive HEAD | tar -x -C /tmp/guard && cd /tmp/guard
+$ python3 -c 'import json; p = "examples/library/module.json"; d = json.load(open(p)); [o.pop("projection") for o in d["operations"] if o["name"] == "library:books.by_author"]; json.dump(d, open(p, "w"), indent=2)'
+$ go test . -run TestTheWorkedModule -count=1
+--- FAIL: TestTheWorkedModulesCostEnvelopesSayWhatItActuallyDoes (0.73s)
+    library_live_test.go:318: sapedbd: sapedb dev listening on 127.0.0.1:65346 as sapedb (no TLS), databases in /var/folders/vk/gd9yfkmn74v993prfl3yqcn80000gn/T/TestTheWorkedModulesCostEnvelopesSayWhatItActuallyDoes1455859901/001
+    library_live_test.go:400: library:books.by_author lets fields [id on_loan shelf title] escape, and its envelope says []
+    library_live_test.go:444: a row carries fields [author id on_loan shelf title]; its envelope promised [id on_loan shelf title]
+FAIL
+FAIL	github.com/sapedb/sapedb	2.243s
 FAIL
 ```
+
+This block is the reason the row below it exists in `agreed`. The two copies of it had drifted:
+this file called a script named `mutate.py`, which appears in no commit of this repository, while
+the published page had already been corrected to the throwaway-copy form. Nothing caught it,
+because no literal from this block was on the list.
 
 ### Prose closing
 
