@@ -86,6 +86,21 @@ func rehearsalModuleRoot(t *testing.T) string {
 func rehearsalExtractCommit(t *testing.T, root, commit, dest string) {
 	t.Helper()
 
+	// Ask whether the commit is here BEFORE trying to read a tree out of it.
+	// git archive's own answer to a missing commit is "fatal: not a tree
+	// object", which reads like damage rather than absence, and absence is by
+	// far the likelier cause: a shallow clone (what actions/checkout does
+	// unless told otherwise) contains one commit, and this one is twenty
+	// back. Distinguishing the two matters because the rest of this file
+	// exists to report that an upgrade broke, and "the history is not here"
+	// is not that.
+	if err := exec.Command("git", "-C", root, "cat-file", "-e", commit+"^{commit}").Run(); err != nil {
+		t.Fatalf("commit %s is not in this clone, so the upgrade rehearsal cannot run: %v\n"+
+			"This is almost certainly a shallow clone rather than a broken upgrade. "+
+			"A checkout needs full history (actions/checkout with fetch-depth: 0); "+
+			"`git rev-parse --is-shallow-repository` will say which it is.", commit, err)
+	}
+
 	archive := exec.Command("git", "-C", root, "archive", commit)
 	tar := exec.Command("tar", "-x", "-C", dest)
 

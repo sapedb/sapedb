@@ -41,6 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The upgrade rehearsal (SAPE-6) extracts a real earlier commit
+          # with `git archive`, twenty commits back. A shallow clone does
+          # not contain it, and the failure reads as
+          # "fatal: not a tree object" — which sounds like a corrupt
+          # repository rather than a missing one. Full history, always.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
@@ -99,6 +106,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The upgrade rehearsal (SAPE-6) extracts a real earlier commit
+          # with `git archive`, twenty commits back. A shallow clone does
+          # not contain it, and the failure reads as
+          # "fatal: not a tree object" — which sounds like a corrupt
+          # repository rather than a missing one. Full history, always.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v6
         with:
