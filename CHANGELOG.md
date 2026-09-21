@@ -64,6 +64,35 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **CI follows the worked example from cold on a machine that is not the
+  author's (SAPE-12, criterion 3).** Every command on
+  `docs/external-operations-page.md` had been run once, by hand, on one laptop,
+  on macOS/arm64. `.github/workflows/worked-example.yml` runs the whole
+  sequence on an `ubuntu-latest` runner on every push and pull request:
+  `keygen`, `seal`, `verify` with and without a trust list, `install` into a
+  database directory that does not exist yet, a real `sapedbd`, and then
+  `sapedb invoke` against all nine operations of `examples/library/module.json`
+  — reads, writes, a batch that changes three documents in one transaction, and
+  a rollup — with the answers asserted, not just the exit codes. 94 assertions
+  in `.github/scripts/worked-example.sh`, under `env -i` so that no inherited
+  `SAPEDB_*` can be what makes it pass.
+
+  **The refusals are asserted too**, because a path that only ever succeeds
+  proves less than one that also proves the door is shut: an empty trust list,
+  a bundle signed by a key nobody here trusts, a bundle whose row ceiling was
+  edited from 50 to 5000 after signing, a required argument left out, an
+  argument the declaration does not name, an argument of the wrong type, an
+  operation that was never declared, and borrowing a book that is already out.
+
+  **The job does not read its commands out of the page.** A job that did could
+  not fail when the page was wrong — it would run whatever the page said and
+  call it green. The commands are written out by hand in the script, and
+  `docs_worked_example_test.go` holds them a third time as literals of its own
+  and demands to find each one on both sides, so a page edited without the job,
+  or a job edited without the page, is named as such. Whitespace is flattened
+  before searching, with a control that names a sentence which genuinely spans
+  a line break on the page and would be invisible to a line-based `grep`.
+
 - **`invoke` in the operator shell and on the command line, so a declared
   operation can actually be run from the tool that installs one.** Until now
   the shipped command line could install an operation and not call one:

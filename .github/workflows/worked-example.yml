@@ -1,0 +1,134 @@
+# SAPE-12's third acceptance criterion, run by a machine that is not the
+# author's.
+#
+# The criterion reads: "The worked example is built, signed and installed by
+# the commands on the page, exactly as written, on a machine that is not the
+# author's." Every command on docs/external-operations-page.md was run before
+# that file landed — once, by hand, on one laptop, on macOS/arm64. That is a
+# thing somebody remembered to do. A runner is a machine that is not the
+# author's, starts from nothing, runs Linux rather than macOS, and does it on
+# every push, which turns the page from something remembered into something
+# measured.
+#
+# Its own workflow rather than a third job in test.yml, because it answers a
+# different question and its red means a different thing. test.yml going red
+# means this repository's code is wrong. This going red means the documentation
+# is wrong — the code may be perfect and the page may simply no longer describe
+# it. Those go to different people, and folding them into one workflow would
+# make the distinction a matter of reading which step failed.
+#
+# The conventions borrowed from test.yml, and why each one is here too:
+#
+#   1. A count needs a floor. A run that asserted nothing also reports zero
+#      failures, exactly as a run that compiled nothing reports zero test
+#      failures. worked-example.sh counts its own assertions and refuses a
+#      total below a hand-written minimum; this workflow reads that same total
+#      back out of the transcript and applies the floor a second time, from
+#      outside, so a script that had been emptied cannot report its own success.
+#   2. `grep -c` exits 1 when it counts zero, and GitHub runs every `run:`
+#      block under `bash -e`, so a bare count inside a variable assignment
+#      kills the step before the handling written for the zero case. Hence
+#      `|| true` and an explicit check after it.
+#   3. `set -o pipefail`, and the status captured the moment the pipe finishes
+#      rather than left to survive the commands after it.
+#
+# fetch-depth is left at its default here, unlike test.yml: nothing in this job
+# reaches back through history. It needs the tree as it is and a Go toolchain.
+
+name: worked example
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  from-cold:
+    name: built, signed, installed and invoked from cold
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # The drift check first, and on its own, because it is the cheapest red
+      # and it says something the sequence below cannot: that the page and the
+      # job still describe the same thing. The sequence can be perfectly green
+      # about commands nobody is being told to type any more.
+      #
+      # -v so that a skip is visible at all — the same guard test.yml explains
+      # at length. There is no legitimate skip among these five tests, so any
+      # skip here means a test stopped running.
+      - name: the page and the job have not drifted apart
+        run: |
+          set -o pipefail
+          go test . -run 'TestTheWorkedExample|TestTheDriftCheckCanSayNo|TestFlatteningIsWhatMakesTheseSearchesWork|TestEveryOperationOnThePageIsInvokedByTheJob' -count=1 -v 2>&1 | tee "$RUNNER_TEMP/drift.txt"
+          status=$?
+          skipped=$(grep -c -- '--- SKIP:' "$RUNNER_TEMP/drift.txt" || true)
+          [ -n "$skipped" ] || skipped=0
+          if [ "$skipped" != "0" ]; then
+            echo "::error::$skipped of the drift tests skipped. None of them has a legitimate skip, so a skip means a test stopped running."
+            exit 1
+          fi
+          passed=$(grep -c -- '--- PASS:' "$RUNNER_TEMP/drift.txt" || true)
+          [ -n "$passed" ] || passed=0
+          echo "drift tests passed: $passed"
+          # Five tests, hand-written here. A -run pattern that matched nothing
+          # exits 0 and prints "ok" — which is the one way this step could go
+          # green having checked nothing at all.
+          if [ "$passed" -lt 5 ]; then
+            echo "::error::only $passed drift tests ran, and there are five — the -run pattern matched nothing, or the tests were removed."
+            exit 1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test exited $status"
+            exit 1
+          fi
+
+      # The sequence itself. An empty environment except for PATH and the Go
+      # toolchain's own variables: SAPEDB_SECRET, SAPEDB_TRUST, SAPEDB_DIR,
+      # SAPEDB_ACCOUNT and SAPEDB_DB all change what these commands do, and a
+      # sequence that passed only because something had already been exported
+      # is the failure this criterion exists to catch. `env -i` is what makes
+      # that a fact rather than a hope about a runner's defaults.
+      #
+      # HOME and the GO* variables are carried across because the Go toolchain
+      # needs somewhere to keep its caches; none of them is a SAPEDB_ variable
+      # and none of them changes what sapedb does.
+      - name: follow the page from cold
+        run: |
+          set -o pipefail
+          env -i \
+            PATH="$PATH" \
+            HOME="$HOME" \
+            GOPATH="$(go env GOPATH)" \
+            GOMODCACHE="$(go env GOMODCACHE)" \
+            GOCACHE="$(go env GOCACHE)" \
+            bash .github/scripts/worked-example.sh 2>&1 | tee "$RUNNER_TEMP/worked.txt"
+          status=$?
+
+          # The floor, applied a second time from outside the script. The
+          # script refuses its own run below a minimum, but a script that had
+          # been replaced with `exit 0` would refuse nothing and report
+          # nothing, and this step would have no way to tell that from success.
+          checks=$(grep -c '^  ok      ' "$RUNNER_TEMP/worked.txt" || true)
+          [ -n "$checks" ] || checks=0
+          echo "assertions that passed: $checks"
+          if [ "$checks" -lt 70 ]; then
+            echo "::error::only $checks assertions passed, and this sequence has far more than that — the run did not do what it looks like it did."
+            exit 1
+          fi
+
+          # And the sentence the script prints only after every assertion held.
+          if ! grep -qF 'the worked example was built, signed, verified, installed and invoked from cold.' "$RUNNER_TEMP/worked.txt"; then
+            echo "::error::the sequence did not reach its last line."
+            exit 1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the commands on docs/external-operations-page.md did not do what the page says they do (exit $status)"
+            exit 1
+          fi
