@@ -259,6 +259,56 @@ contains verify.out "collection library_loans (key id string, ulid)" "declares l
 contains verify.out "rollup loans_per_member [member string missing:skip] count" "declares the rollup"
 contains verify.out "operation library:books.by_author scan library_books via by_author limit 50" "the row ceiling is in the report"
 
+# ---------------------------------------------------------------------------
+# The cost envelope, read BEFORE anything is installed. SAPE-12's fourth
+# criterion: the database this asserts against does not exist yet, and the
+# `lib` directory check further down proves it.
+#
+# Every number below is a hand-written literal, worked out from the
+# declarations in module.json rather than read back out of it. borrow's three
+# collections are the ones worth having here: nobody wrote that list, it is
+# read off its three steps, and give_back beside it reaches two of the same
+# three.
+# ---------------------------------------------------------------------------
+
+step "sapedb verify -envelopes library.bundle.json          # the cost envelope, before installing"
+SAPEDB_TRUST="worked-example=$key" "$sapedb" verify -envelopes library.bundle.json > envelopes.out 2>&1
+status $? 0 "verify -envelopes succeeded"
+contains envelopes.out "cost envelopes (read from these declarations, not from any database)" \
+  "the envelope block says where the numbers came from"
+contains envelopes.out "    collections  library_books, library_loans, library_members" \
+  "borrow reaches three collections, read off its steps"
+contains envelopes.out "    rows at most 3" "and its ceiling is the sum of those three steps"
+contains envelopes.out "    collections  library_books, library_loans" "give_back reaches two of the same three"
+contains envelopes.out "    rows at most 2" "and its ceiling is 2"
+contains envelopes.out "    escapes      id, on_loan, shelf, title" \
+  "by_author lets exactly the four projected fields out"
+contains envelopes.out "    rows at most 50" "against a ceiling of 50"
+contains envelopes.out "    escapes      nothing" "a count hands back a number, so nothing escapes"
+contains envelopes.out "    indexes      by_shelf" "and it walks by_shelf to do it"
+
+# Every one of the nine gets a line. A block that quietly skipped an operation
+# would make the module read as smaller than it is.
+for operation in \
+  library:books.shelve \
+  library:members.join \
+  library:books.get \
+  library:books.by_author \
+  library:books.on_shelf \
+  library:loans.borrow \
+  library:loans.give_back \
+  library:loans.of_member \
+  library:loans.per_member
+do
+  contains envelopes.out "  $operation" "an envelope for $operation"
+done
+
+# And the flag is what produces it. Without -envelopes the same bundle prints
+# the same report and none of the above, which is what makes "readable before
+# installation" a change rather than a description of what was already there.
+absent verify.out "cost envelopes" "the plain report carries no envelopes"
+absent verify.out "rows at most" "nor any row ceiling line"
+
 step "a tampered bundle: the row ceiling moved from 50 to 5000"
 sed 's/"limit": 50/"limit": 5000/' library.bundle.json > tampered.bundle.json
 SAPEDB_TRUST="worked-example=$key" "$sapedb" verify tampered.bundle.json > tampered.out 2>&1

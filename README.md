@@ -295,6 +295,33 @@ what the server is able to do.
       operation orders.add insert orders
       operation orders.by_customer scan orders via by_customer limit 25 scopes orders:read
 
+That says what the bundle *declares*. `-envelopes` says what it *costs*, and it
+is the same block the catalogue prints after the install rather than a second
+opinion about it — one derivation, reached from the file here and from the
+store afterwards. Read it before you install, because that is what you are
+deciding:
+
+    $ sapedb verify -envelopes orders.bundle
+    …
+    cost envelopes (read from these declarations, not from any database)
+      orders.add
+        collections  orders
+        indexes      none
+        rows at most 1
+        escapes      nothing
+      orders.by_customer
+        collections  orders
+        indexes      by_customer
+        rows at most 25
+        escapes      the whole document
+        scopes       orders:read
+
+`escapes` has three answers, not two. `nothing` is an operation that hands back
+no document fields at all. A list of names is a read that declared a
+`projection`, and those names are the whole of what leaves the database. `the
+whole document` is a read that declared none — the largest envelope, not an
+empty one, and worth a second look when you are the one consenting.
+
     $ sapedb install orders.bundle
     installing bundle "orders-pack" version "3.4.0", signed by 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64, trusted here as "orders-authors"
     collection orders

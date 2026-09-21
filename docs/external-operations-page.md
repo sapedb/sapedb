@@ -14,6 +14,15 @@
 >
 > Closing that gap needs a check that can read the site. Until there is one, the page is
 > verified by hand, and a change to either side should be made on both.
+>
+> **Not yet on the published page, as of the commit that adds this line:** section 3's
+> `sapedb verify -envelopes` block (code block 8), the prose around it, and code block 11.
+> The published page still carries the paragraph those replace &mdash; the one that says
+> `verify` cannot print a cost envelope and that the way to read one is to install into a
+> scratch database first. That paragraph is now **false**: the flag exists, and
+> `tools/page-drift-check.sh` in the parent `ecosy-labs` repository reports the two literals
+> the published page is missing. Applying section 3 to `learn/external-operations.html` is
+> what closes it.
 
 This file is copy for somebody else to apply. Nothing under `projects/sapedb-site/` was
 edited while writing it — that directory was being uploaded by another agent, and an edit
@@ -459,11 +468,98 @@ declaration rather than written by hand beside it, so it cannot disagree with th
 describes. Which collections it touches. Which indexes it uses. The most rows it can ever
 return. Which fields leave the database in its result.</p>
 
-<p>You read it from the catalogue, so it costs nothing to run and does not run the
-operation.</p>
+<p>There are two places to read it and they are the same four facts.
+<strong>Before you install anything</strong>, <code>sapedb verify -envelopes</code> reads the
+envelope out of the file you were handed. <strong>After you install it</strong>, the catalogue
+carries it. Neither runs the operation, and neither is a second opinion about the other &mdash;
+both go through one derivation, so the numbers you decide on are the numbers you get
+afterwards.</p>
+
+<p>Read it from the file first, because that is the order the decision happens in: the envelope
+is what the consent above is <em>to</em>, and by the time the module is in there is nothing
+left to consent to.</p>
 ```
 
 ### Code block 8
+
+Label: `sapedb verify -envelopes &mdash; before anything is installed` · what: `verified` · `data-hl="none"`
+
+The `-envelopes` block only. Everything above it in the output &mdash; the four checks, the two
+names, and the `declares` listing &mdash; is code block 4's output, unchanged and in the same
+place; this is what the flag adds underneath it. All nine operations, none left out.
+
+```
+$ sapedb verify -envelopes library.bundle.json
+
+cost envelopes (read from these declarations, not from any database)
+  library:books.shelve
+    collections  library_books
+    indexes      none
+    rows at most 1
+    escapes      nothing
+  library:members.join
+    collections  library_members
+    indexes      none
+    rows at most 1
+    escapes      nothing
+  library:books.get
+    collections  library_books
+    indexes      none
+    rows at most 1
+    escapes      author, id, on_loan, shelf, title
+  library:books.by_author
+    collections  library_books
+    indexes      by_author
+    rows at most 50
+    escapes      id, on_loan, shelf, title
+  library:books.on_shelf
+    collections  library_books
+    indexes      by_shelf
+    rows at most 1000
+    escapes      nothing
+  library:loans.borrow
+    collections  library_books, library_loans, library_members
+    indexes      none
+    rows at most 3
+    escapes      nothing
+  library:loans.give_back
+    collections  library_books, library_loans
+    indexes      none
+    rows at most 2
+    escapes      nothing
+  library:loans.of_member
+    collections  library_loans
+    indexes      by_member
+    rows at most 25
+    escapes      book, borrowed, due, id, returned
+  library:loans.per_member
+    collections  library_loans
+    indexes      none
+    rows at most 100
+    escapes      nothing
+```
+
+### Prose on the three answers `escapes` has
+
+```html
+<p><code>escapes</code> has three answers and not two, and the difference matters when you are
+the one deciding. <code>nothing</code> means the operation hands back no document fields at all
+&mdash; a write, a count, or a rollup total. A list of field names means a read that declared a
+projection, and those names are the whole of what leaves the database. The third answer,
+<code>the whole document</code>, is what you get for a read that declared no projection, and it
+is the one to look twice at: it is not a small envelope, it is the largest one, and printing it
+as an empty list would have made the most permissive answer look like the most restrictive.</p>
+
+<p>One honest limit. If a step of an operation <em>calls another operation</em>, its ceiling is
+partly written in a declaration the file does not carry &mdash; a reference pins a version, and
+a bundle's own operations have no version until the store you install into assigns one. So that
+one envelope reads <code>unreadable</code>, with the reference it stopped at named, instead of a
+number. A guess there would be a number that can disagree with what the store says afterwards,
+which is the one thing this is for. The worked module composes nothing, so every envelope above
+is a real one.</p>
+```
+
+### Code block 9
 
 Label: `sapedb shell &mdash; ls` · what: `verified against a running sapedbd` · `data-hl="none"`
 
@@ -510,7 +606,7 @@ The documents it reads have five &mdash; they also carry <code>author</code>, wh
 built on. Run it, and <code>author</code> is not in the answer.</p>
 ```
 
-### Code block 9
+### Code block 10
 
 Label: `go test &mdash; the envelope, checked against what the operation returns` · what: `verified &mdash; the guard, deliberately broken` · `data-hl="none"`
 
@@ -534,14 +630,33 @@ the second says a document came out of the database carrying a field the envelop
 promised. An envelope checked only against the declaration it was derived from would have
 stayed green.</p>
 
-<p>One caveat, stated plainly because it is the gap between what this page shows and what an
-operator wants. <code>sapedb verify</code> prints what a bundle <em>declares</em> &mdash; the
-collections, the indexes, the limits &mdash; but it does not print the derived envelope, because
-the envelope is computed by the store and a bundle you have not installed is not in one. The
-way to read a module's envelope before installing it somewhere that matters is to install it
-into a scratch database first, read the catalogue, and then decide. That is cheap and reversible
-&mdash; installing is additive, and a scratch database is a file you delete &mdash; but it is a
-step, and a <code>verify</code> that printed the envelope directly would remove it.</p>
+<p>Now read code block 8 and code block 9 side by side, because the whole point of reading an
+envelope before you install is that it is the same envelope afterwards.
+<code>library:books.by_author</code> reads 50 rows, walks <code>by_author</code>, touches
+<code>library_books</code> and lets four named fields out &mdash; in the file, and in the
+catalogue of the database it was installed into. That is not two implementations agreeing. It is
+one derivation reached from two places: <code>verify</code> hands it the declarations in the
+file, the catalogue hands it the declarations in the store, and there is no second copy of the
+arithmetic to drift.</p>
+
+<p>Asserted rather than asked for. The test below reads every envelope out of the file with no
+database in existence, then installs that same module over the wire and reads every envelope
+back out of the catalogue, and requires them to be equal field for field &mdash; for all nine
+operations, with the one field that is <em>allowed</em> to differ (the version, which only the
+receiving store assigns) checked separately as 0 before and 1 after.</p>
+```
+
+### Code block 11
+
+Label: `go test &mdash; the envelope read from the file is the envelope read from the store` · what: `verified end to end against a running sapedbd` · `data-hl="none"`
+
+```
+$ go test . -run TestTheEnvelopeReadFromTheBundleIsTheEnvelopeReadFromTheStore -count=1 -v
+=== RUN   TestTheEnvelopeReadFromTheBundleIsTheEnvelopeReadFromTheStore
+    library_envelope_live_test.go:120: sapedbd: sapedb dev listening on 127.0.0.1:51423 as sapedb (no TLS), databases in /var/folders/vk/gd9yfkmn74v993prfl3yqcn80000gn/T/TestTheEnvelopeReadFromTheBundleIsTheEnvelopeReadFromTheStore1918350022/001
+--- PASS: TestTheEnvelopeReadFromTheBundleIsTheEnvelopeReadFromTheStore (0.79s)
+PASS
+ok  	github.com/sapedb/sapedb	1.252s
 ```
 
 ---

@@ -97,6 +97,23 @@ func newCosts() *costs {
 // depth would buy nothing that is not already bought, and a constant nobody
 // can justify is worse than no constant.
 func (s *Store) ceiling(operation Operation, within *costs) (int, error) {
+	return ceilingOf(operation, within, s.Operation)
+}
+
+// ceilingOf is the walk itself, with the one thing it needs from a store
+// handed to it instead: which declaration a `name@version` reference names.
+//
+// Nothing else in the walk touches a store. Every other number comes off the
+// Operation in front of it — its action, its declared limit, its steps — so
+// the store was only ever the place the callees were looked up, and a walk
+// that takes that lookup as an argument can be run over declarations that are
+// not in a store at all. That is what makes a bundle's cost envelope readable
+// BEFORE it is installed (SAPE-12 criterion 4), and it is deliberately the
+// SAME function rather than a second one written against a bundle: two
+// implementations of "how far does this reach" are two answers that can drift,
+// and what the criterion asks for is precisely that the answer read off the
+// file equals the answer the store gives afterwards.
+func ceilingOf(operation Operation, within *costs, among Operations) (int, error) {
 	switch operation.Action {
 	case ActionGet, ActionInsert, ActionPut, ActionUpdate, ActionDelete:
 		return 1, nil
@@ -164,14 +181,14 @@ func (s *Store) ceiling(operation Operation, within *costs) (int, error) {
 				total++
 				continue
 			}
-			callee, found, err := s.Operation(step.Operation, step.Version)
+			callee, found, err := among(step.Operation, step.Version)
 			if err != nil {
 				return 0, err
 			}
 			if !found {
 				return 0, fmt.Errorf("%w: %q version %d", ErrNoOperation, step.Operation, step.Version)
 			}
-			reach, err := s.ceiling(callee, within)
+			reach, err := ceilingOf(callee, within, among)
 			if err != nil {
 				return 0, err
 			}

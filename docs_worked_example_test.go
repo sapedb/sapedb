@@ -88,6 +88,14 @@ var agreed = []struct {
 	{"and trust is not even reached", "not reached; the signature did not check out"},
 	{"a key nobody here trusts", "no operator of this server put that key on the list"},
 
+	// The cost envelope, read before anything is installed (SAPE-12's fourth
+	// criterion). Two rows, because they fail differently: the first is the
+	// command a reader types, the second is the answer they get, and a page
+	// that kept the command while the flag stopped printing anything would
+	// still satisfy the first on its own.
+	{"the cost envelope is readable before installing", "verify -envelopes library.bundle.json"},
+	{"and the envelope block says where its numbers come from", "cost envelopes (read from these declarations, not from any database)"},
+
 	// The tamper the page chose: a row ceiling, 50 to 5000. The signature is
 	// over the declarations rather than the bytes, which is the whole reason
 	// this particular edit is the one worth showing.

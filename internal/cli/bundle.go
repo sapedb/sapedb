@@ -15,6 +15,14 @@ package cli
 // up. So it prints rather than exits quietly: what it prints is the point of
 // the command, and the exit status is only the summary.
 //
+// `-envelopes` adds the second half of that question. What a bundle DECLARES
+// has always been printed here; what it COSTS had to be read out of a store,
+// which meant installing the bundle first — the wrong way round, since the
+// cost envelope is what somebody reads in order to decide whether to install.
+// The envelopes now come off the file, through the store's own derivation
+// rather than a copy of it. See describeEnvelopes below and
+// internal/bundle/envelope.go.
+//
 // `sapedb install FILE` is `sapedb apply` with an author attached. It runs
 // the same db.Declare / db.DeclareOperation loop over the same two lists —
 // which is the whole reason a bundle carries those two lists and not a
@@ -51,6 +59,46 @@ func (o options) trusted() (*bundle.Trust, error) {
 	return bundle.TrustFromEnv(o.lookup)
 }
 
+// verifyArgs splits verify's arguments into the file it is about and whether
+// the cost envelopes were asked for.
+//
+// Parsed here rather than in parse() up in cli.go, and the difference is not
+// cosmetic. -envelopes is verify's option and nobody else's: putting it in
+// the global set would make it something a reader has to wonder about in
+// front of `dump`, `restore` and six other commands that would silently
+// ignore it. parse() stops at the first word that is not an option, so
+// everything typed after the command name arrives here untouched — which is
+// what makes a per-command option possible without a second parser.
+//
+// Position does not matter, because a reader who types
+// `verify library.bundle.json -envelopes` has not made a mistake.
+func verifyArgs(args []string) (string, bool, error) {
+	path, envelopes := "", false
+	for _, arg := range args {
+		switch arg {
+		case "-envelopes", "--envelopes":
+			envelopes = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("%w: verify has no option called %q; the one it has is -envelopes", ErrUsage, arg)
+			}
+			if path != "" {
+				// Deliberately not the same sentence as the no-file case
+				// below. cli_test.go's assertRefusedBecause pins each
+				// refusal's own words AND checks that no other refusal's
+				// words are in it, so two cases sharing a sentence would
+				// make one of them unpinnable.
+				return "", false, fmt.Errorf("%w: verify is about one bundle file, and got %q and %q", ErrUsage, path, arg)
+			}
+			path = arg
+		}
+	}
+	if path == "" {
+		return "", false, fmt.Errorf("%w: verify takes one bundle file, and got %q", ErrUsage, args)
+	}
+	return path, envelopes, nil
+}
+
 // checkVerify and checkInstall are the argument checks. Both read the file
 // and put it all the way through verification, before run() opens anything,
 // for the reason every other check in this package runs there: a refused
@@ -65,16 +113,17 @@ func (o options) trusted() (*bundle.Trust, error) {
 // stated reason: a duplicate keeps a mutation that guts one of them from
 // silently changing what the other does.
 func checkVerify(opts options, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("%w: verify takes one bundle file, and got %q", ErrUsage, args)
+	path, _, err := verifyArgs(args)
+	if err != nil {
+		return err
 	}
-	if _, err := os.ReadFile(args[0]); err != nil {
+	if _, err := os.ReadFile(path); err != nil {
 		return err
 	}
 	// Not verified here. verify's entire job is to report a refusal in
 	// detail, so a refusal reached at check time would print the one-line
 	// error and skip the report the command exists to produce.
-	_, err := opts.trusted()
+	_, err = opts.trusted()
 	return err
 }
 
@@ -133,7 +182,11 @@ func verified(opts options, path string) (bundle.Bundle, string, string, error) 
 // the report also names the key that was presented, the name the bundle
 // claims for its author, and the declarations, so a refusal can be taken to
 // the person who sent the file.
-func verify(opts options, path string, out io.Writer) error {
+func verify(opts options, args []string, out io.Writer) error {
+	path, envelopes, err := verifyArgs(args)
+	if err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -230,6 +283,10 @@ func verify(opts options, path string, out io.Writer) error {
 	}
 	describe(report, b)
 
+	if envelopes {
+		describeEnvelopes(report, b)
+	}
+
 	if _, err := out.Write(report.Bytes()); err != nil {
 		return err
 	}
@@ -307,6 +364,79 @@ func describe(out io.Writer, b bundle.Bundle) {
 		}
 		fmt.Fprintln(out)
 	}
+}
+
+// describeEnvelopes prints the cost envelope of every operation the bundle
+// declares: SAPE-12's fourth criterion, the half that did not hold.
+//
+// The four facts SAPE-8 asks for, and the scopes that ride along with them,
+// read off the file rather than out of a database. Until this existed, the
+// only way to see them was to install the bundle into a scratch database and
+// read the catalogue — which is backwards, since the envelope is what a
+// person reads to decide whether to install it at all.
+//
+// It is NOT derived here. bundle.Envelopes calls store.EnvelopeOf, the same
+// function the store's own catalogue goes through, so the numbers below are
+// the numbers `ls` will print after the install rather than a second opinion
+// about them. See internal/bundle/envelope.go.
+//
+// An unreadable envelope is printed as unreadable and does not change the
+// exit status. The status is the trust decision and nothing else: a bundle
+// with a composed step is perfectly installable, and turning "I cannot read
+// this ceiling out of the file" into a refusal would be this command
+// answering a question it was not asked.
+func describeEnvelopes(out io.Writer, b bundle.Bundle) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "cost envelopes (read from these declarations, not from any database)")
+
+	readings := bundle.Envelopes(b)
+	if len(readings) == 0 {
+		fmt.Fprintln(out, "  nothing: this bundle declares no operations")
+		return
+	}
+
+	for _, reading := range readings {
+		fmt.Fprintf(out, "  %s\n", reading.Operation)
+		if reading.Err != nil {
+			fmt.Fprintf(out, "    %-12s %s\n", "unreadable", reading.Err)
+			continue
+		}
+		fmt.Fprintf(out, "    %-12s %s\n", "collections", listOrNone(reading.Envelope.Collections))
+		fmt.Fprintf(out, "    %-12s %s\n", "indexes", listOrNone(reading.Envelope.Indexes))
+		fmt.Fprintf(out, "    %-12s %d\n", "rows at most", reading.Envelope.Limit)
+		fmt.Fprintf(out, "    %-12s %s\n", "escapes", escaping(reading.Envelope))
+		if len(reading.Envelope.Scopes) > 0 {
+			fmt.Fprintf(out, "    %-12s %s\n", "scopes", strings.Join(reading.Envelope.Scopes, ", "))
+		}
+	}
+}
+
+// escaping spells out the fourth fact: which fields leave the database.
+//
+// Three answers and not two, because "no fields listed" means two completely
+// different things — see store.Envelope's own doc. A count, a write and a
+// totals hand back no document fields at all; a get or a scan with no
+// declared projection hands back every field the document has. Printing an
+// empty list for both would put the most permissive answer and the most
+// restrictive one in the same words.
+func escaping(envelope store.Envelope) string {
+	switch {
+	case envelope.WholeDocument:
+		return "the whole document"
+	case len(envelope.Projection) > 0:
+		return strings.Join(envelope.Projection, ", ")
+	default:
+		return "nothing"
+	}
+}
+
+// listOrNone keeps an empty set from printing as an empty column, which reads
+// as a line that was cut off rather than as an answer.
+func listOrNone(list []string) string {
+	if len(list) == 0 {
+		return "none"
+	}
+	return strings.Join(list, ", ")
 }
 
 func describeFields(list []store.Field) string {

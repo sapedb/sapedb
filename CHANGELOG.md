@@ -64,6 +64,62 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **`sapedb verify -envelopes`: a bundle's cost envelope, readable before it is
+  installed (SAPE-12, criterion 4).** The criterion has two halves and only one
+  of them held. "Matches what it does" was measured — a live test runs each
+  operation of the worked module and compares the answer against the envelope,
+  and deleting a `projection` from the module makes it fail by name. "Readable
+  **before** installation" was not: `verify` printed what a bundle *declares*
+  and no envelope, there was no flag for one, and the only way to see an
+  operation's cost was to install the bundle into a database first. That is
+  backwards. The envelope exists so somebody can decide whether to trust an
+  operation before running it, and an answer you can only get by installing the
+  thing is not an answer to that question. The page said so out loud, in a
+  paragraph that has now been replaced.
+
+  **One derivation, reached from two places — not a second implementation.**
+  `Store.envelopeOf` and `ceiling()` only ever needed a store for one thing:
+  looking up the operation a composed step names. Both now take that lookup as
+  an argument (`store.Operations`), so the walk itself is `store.EnvelopeOf`,
+  called by the catalogue with the store's own `Operation` method and by
+  `internal/bundle` with a lookup over the file. Nothing was copied. Two
+  functions computing a ceiling would be two answers that can drift, and what
+  this criterion asks for is precisely that the number read before installing
+  equals the number read after.
+
+  **Measured as that, not asserted.**
+  `TestTheEnvelopeReadFromTheBundleIsTheEnvelopeReadFromTheStore`
+  reads every envelope out of
+  `examples/library/module.json` with no database in existence, then installs
+  that same module over the wire and reads every envelope back out of the
+  catalogue, and compares them field for field for all nine operations — plus a
+  whole-struct comparison, so a tenth field added to `store.Envelope` tomorrow
+  cannot quietly fall outside the check. The one field that is *allowed* to
+  differ is asserted rather than skipped: a bundle carries no version, the
+  store assigns 1, and both halves of that are checked. A test of the
+  pre-install path alone would have been self-confirming; this one puts the
+  right-hand side through sealing, verification, nine `declare` frames, a JSON
+  round trip into a B-tree and a commit first.
+
+  **A composed step's ceiling is not readable from a file, and it says so
+  rather than guessing.** A step must pin a version (N1), and a bundle's own
+  operations carry no version — only the receiving store assigns one — so a
+  reference inside a bundle can only ever name a declaration that store already
+  holds. That envelope prints as `unreadable`, naming the reference it stopped
+  at, and does not change the exit status: a bundle with a composed step is
+  perfectly installable, and the gap is in what the file can tell you, not in
+  the file. Three guesses were considered and all three are worse — matching by
+  name ignoring the version, summing only the readable steps, and falling back
+  to the enclosing declared limit each produce a number that can disagree with
+  what the store reports, which is the one failure this is built to rule out.
+  The worked module composes nothing, so all nine of its envelopes are real.
+
+  Nothing on the wire, in the protocol or in `fixtures/frames.json` changes.
+  `store.Envelope` keeps every field and every tag it had; the catalogue sends
+  exactly what it sent before. This is a new flag on a command that opens no
+  database, plus one exported function and one exported type in packages no
+  client links against.
+
 - **`deleteRange`: a stretch of keys removed in key order, with a ceiling the
   host counts (SAPE-32).** Asked whether a batch could remove a few thousand
   rows atomically, this project's planner said no, and gave as the reason that

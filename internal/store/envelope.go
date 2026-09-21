@@ -110,6 +110,19 @@ type Envelope struct {
 	Scopes []string `json:"scopes,omitempty"`
 }
 
+// Operations answers "which declaration is called name, at version" — found
+// false when there is none, an error when the question could not be asked.
+//
+// It is the only thing deriving an envelope needs that is not already in the
+// declaration in front of it: a composed operation's steps name other
+// operations, and their ceilings and the collections they touch are in THOSE
+// declarations rather than in this one. A Store satisfies this with its own
+// Operation method, and that is how every envelope was read until SAPE-12's
+// fourth criterion asked for one before installation — a bundle nobody has
+// installed is not in a store, and a criterion that can only be met by
+// installing the thing first is not the criterion that was written.
+type Operations func(name string, version int) (Operation, bool, error)
+
 // Envelope reads the cost envelope of one declared operation, by name and
 // version (0 for the newest), without running it.
 func (s *Store) Envelope(name string, version int) (Envelope, error) {
@@ -126,6 +139,25 @@ func (s *Store) Envelope(name string, version int) (Envelope, error) {
 // envelopeOf builds the envelope of an operation this store already knows —
 // either the one Envelope looked up, or one WhatIsHere is about to list.
 func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
+	return EnvelopeOf(operation, s.Operation)
+}
+
+// EnvelopeOf derives the cost envelope of one declaration, resolving whatever
+// it calls through among.
+//
+// This is the whole derivation, and there is one of it. A store reaches it
+// through envelopeOf just above, passing its own Operation method; a bundle
+// that has not been installed anywhere reaches it with a lookup over the
+// operations the file itself declares. Both get the same numbers out of the
+// same walk, which is the point: SAPE-12's fourth criterion is not "a bundle
+// prints something envelope-shaped", it is that what a person reads before
+// installing is what the store will say afterwards, and two functions
+// computing it would be two answers with nothing holding them together.
+//
+// It never opens anything itself. Everything below is read off operation, off
+// the declarations among hands back, and off nothing else — no collection
+// spec, no tree, no transaction — which is why it can run against a file.
+func EnvelopeOf(operation Operation, among Operations) (Envelope, error) {
 	// The same number N5 already checked at declare time, read from outside
 	// this package for the first time. Reused rather than re-derived: a
 	// second implementation of "how far does this reach" is a second place
@@ -134,7 +166,7 @@ func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
 	limit := operation.Limit
 	if operation.Action != ActionCount && operation.Action != ActionHashRange {
 		var err error
-		limit, err = s.ceiling(operation, newCosts())
+		limit, err = ceilingOf(operation, newCosts(), among)
 		if err != nil {
 			return Envelope{}, err
 		}
@@ -172,7 +204,7 @@ func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
 			for i := range op.Steps {
 				step := &op.Steps[i]
 				if step.Operation != "" {
-					callee, found, err := s.Operation(step.Operation, step.Version)
+					callee, found, err := among(step.Operation, step.Version)
 					if err != nil {
 						return err
 					}

@@ -70,6 +70,13 @@ hex characters of an ed25519 public key. Unset is an empty list, and an empty
 list refuses every bundle and says so — there is no spelling that means
 "trust anything". "verify" and "install" read it; nothing else does.
 
+"verify -envelopes FILE" adds each operation's cost envelope to the report:
+which collections it touches, which indexes it uses, the most rows it can
+hand back, and which fields leave the database. It is read off the
+declarations in the file, so it can be read before the bundle is installed
+anywhere — and it is the same derivation the catalogue prints afterwards, not
+a second one.
+
 A password is never taken as an argument: arguments are visible to anyone who
 can run ps. "url" makes one and prints it as part of the connection string,
 or reads one from stdin when told to. A signing key is not an argument either:
@@ -320,7 +327,10 @@ var commands = []command{
 		standalone: true,
 		check:      checkVerify,
 		run: func(opts options, _ *store.Store, args []string, _ io.Reader, out io.Writer) error {
-			return verify(opts, args[0], out)
+			// The whole of args rather than args[0]: verify takes an
+			// option of its own, -envelopes, and parses it itself.
+			// See verifyArgs in bundle.go for why it is not in parse().
+			return verify(opts, args, out)
 		},
 	},
 	{
