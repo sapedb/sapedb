@@ -64,6 +64,51 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **`invoke` in the operator shell and on the command line, so a declared
+  operation can actually be run from the tool that installs one.** Until now
+  the shipped command line could install an operation and not call one:
+  `internal/cli/shell.go` handled `help`, `ls`, `declare` and the ad-hoc
+  `get`/`scan`/`count`, and `grep -rn '"invoke"' internal/cli/*.go` found
+  nothing outside tests. A stranger who installed `examples/library` could `ls`
+  its nine operations and had nowhere to go without writing Go or TypeScript,
+  which for a database whose whole argument is declared operations is the most
+  quotable flaw in it.
+
+  **The arguments come from the declaration.** `invoke library:books.get
+  id=bk-1`: the name is one word, so a namespaced name with a colon in it is
+  typed whole and the colon is never a separator this grammar reads; each
+  argument is `name=value`, split at the first `=`, so a value may hold one.
+  The declared type decides the encoding — a `string` is written as it stands,
+  a `number`, a `bool` and an argument declared `any` are written as JSON — so
+  the operator never guesses a quoting rule the database already knows.
+
+  **Three refusals, each by name, before anything goes out.** A missing
+  required argument names which one and what type it is; an argument the
+  declaration does not name is refused with the list of the ones it does take,
+  never dropped; a value that is not the declared type says which argument and
+  what was expected. `internal/store`'s `bind` still checks all three on the
+  far side and is still the authority — this is not a substitute for it, it is
+  what makes `id=bk-1` mean a string in the first place.
+
+  **`sapedb invoke HOST NAME ARG=VALUE...` is the same thing for a script**,
+  going through the same parser and printer. It exists for one reason the
+  shell cannot cover: `echo 'invoke …' | sapedb shell` prints a refusal and
+  exits 0, so a deployment step cannot tell a write from a refusal. This
+  returns the error, so the status is 1. The host is required rather than
+  defaulted, because an operation name may hold a colon and an optional
+  leading host would make the first word ambiguous between `host:port` and a
+  namespaced name.
+
+  **`InvokeVersion` is deliberately not reachable from either.** The shell's
+  contribution over a raw wire call is checking the arguments against the
+  declaration, and the only declaration it can read is the newest:
+  `store.Operations()` keeps one entry per name, so `ls` shows no older
+  versions and `WhatIsHere` carries none. Reaching version N while validating
+  against the newest would check the arguments against the wrong declaration,
+  and the number would have to be typed from nowhere. When the catalogue
+  carries older versions, the syntax is already free — a bare word can never
+  be an argument, which must hold `=`.
+
 - **A worked external-operation module, and the tests that keep it honest
   (SAPE-12).** `examples/library/module.json` is a lending library: three
   collections with their own keys, five indexes, one rollup, and nine

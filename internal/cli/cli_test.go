@@ -1769,6 +1769,13 @@ var rejectionCases = map[string]rejectionCase{
 		wants: "never given as an argument",
 	},
 	"shell": {args: []string{"shell", "localhost:1", "-nope"}, wants: "shell takes host:port and optionally -insecure"},
+	// A host and no operation. Refused by the count rule in checkInvoke,
+	// before connect() ever resolves a name or opens a socket — which is
+	// what makes this a case that also demonstrates the tree staying
+	// clean, the same discipline every other row here carries. A case
+	// with both words present would instead be refused by the dial, which
+	// is not an argument check at all.
+	"invoke": {args: []string{"invoke", "localhost:1"}, wants: "invoke takes host:port, an operation, and its arguments written NAME=VALUE"},
 	// version runs before the secret/account/name gates, so its rejection
 	// case is the one that proves skipping those gates did not also skip
 	// the argument check: "version junk" must still be refused, and refused

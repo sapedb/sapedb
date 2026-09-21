@@ -17,6 +17,21 @@ type looked struct {
 	answer wire.Explored
 	here   store.Catalogue
 	fail   error
+
+	// ran is every (name, arguments) pair that went out as an invoke, which
+	// is what an `invoke` line has to be checked against: the line is only
+	// right if the call it became is.
+	ran []invoked
+	// gave is what an invoke answers with, and refused is the error it
+	// answers with instead when it is set.
+	gave    store.Result
+	refused error
+}
+
+// invoked is one call the shell made through Invoke.
+type invoked struct {
+	name      string
+	arguments map[string]any
 }
 
 func (l *looked) WhatIsHere() (store.Catalogue, error) { return l.here, l.fail }
@@ -24,6 +39,14 @@ func (l *looked) WhatIsHere() (store.Catalogue, error) { return l.here, l.fail }
 func (l *looked) Explore(access store.Access) (wire.Explored, error) {
 	l.asked = append(l.asked, access)
 	return l.answer, l.fail
+}
+
+func (l *looked) Invoke(name string, arguments map[string]any) (store.Result, error) {
+	l.ran = append(l.ran, invoked{name: name, arguments: arguments})
+	if l.refused != nil {
+		return store.Result{}, l.refused
+	}
+	return l.gave, nil
 }
 
 func typed(t *testing.T, look Looking, lines ...string) string {

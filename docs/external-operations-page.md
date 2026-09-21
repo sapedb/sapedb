@@ -536,32 +536,56 @@ step, and a <code>verify</code> that printed the envelope directly would remove 
 These are not replacements for a tagged section. They are things a stranger walks into that
 the page as outlined does not mention anywhere, each one measured by doing it.
 
-### Add to section 2, after the install block: there is no CLI for running one
+### Add to section 2, after the install block: running one from the command line
+
+This subsection said the opposite until `invoke` shipped: the command line could install an
+operation and not call one. It can now, and the paragraph below replaces the one that said
+it could not. Everything in it was run against the worked module installed as a signed
+bundle.
 
 ```html
-<p>One thing to know before you install a module: the shipped command line can
-<em>install</em> an operation and cannot <em>call</em> one. The operator shell reads the
-catalogue and does ad-hoc <code>get</code>, <code>scan</code> and <code>count</code> against
-collections directly &mdash; it has no <code>invoke</code>. Running a declared operation means
-a client: the Go package, or one of the three drivers. This is consistent with the rest of the
-design rather than an omission, since an ad-hoc read by an operator and a declared operation
-run by an application are deliberately different things, but it surprises everybody once.</p>
+<p>A module you installed is callable from the same command line that installed it. The
+operator shell takes <code>invoke &lt;name&gt; [arg=value]...</code>, and the arguments come
+from the declaration: a parameter declared a string is written as it stands, a number and a
+true or false are written as JSON, and an argument the declaration does not name is refused
+rather than dropped. The same thing exists non-interactively as
+<code>sapedb invoke HOST NAME ARG=VALUE...</code>, which exits non-zero when the operation is
+refused, so a deployment step can branch on it. This is still not an expression language:
+what runs is the declaration, unchanged, and the shell&rsquo;s own ad-hoc
+<code>get</code>/<code>scan</code>/<code>count</code> remain a different thing beside it.</p>
 ```
 
-Measured:
+Measured, against `examples/library/module.json` installed as a signed bundle:
 
 ```
-$ sapedb -account a -db m shell 127.0.0.1:7466 -insecure
-m> help
+$ sapedb -account acme -db main shell 127.0.0.1:7455 -insecure
+main> help
   ls                                 what this database holds
+  invoke <name> [arg=value]...       run a declared operation
   get <collection> <key>             one document by its key
   scan <collection> [index] [...]    a stretch of an index
   count <collection> [index] [...]   how many are in that stretch
   declare [name]                     the operation that would do the last thing
   help                               this
   exit                               leave
-m> invoke x:b.tot
-  there is no "invoke" here; type help
+main> invoke library:books.shelve id=bk-777 title=the-new-arrival author=solo-writer shelf=poetry
+  key "bk-777"
+  changed 1
+main> invoke library:books.get id=bk-777
+  {"author":"solo-writer","id":"bk-777","on_loan":false,"shelf":"poetry","title":"the-new-arrival"}
+main> invoke library:books.on_shelf shelf=history
+  51
+main> invoke library:loans.borrow book=bk-777 member=m-1 borrowed=1758412800 due=1759622400
+  key "01M30TPC4NN51VZ7HB1ZSH39KF"
+  changed 3
+main> invoke library:books.get
+  "library:books.get" needs "id", which is a string
+main> invoke library:books.get id=bk-777 shelf=poetry
+  "library:books.get" does not take "shelf"; it takes id=<string>
+main> invoke library:members.join id=m-2 name=alan joined=yesterday
+  "joined" is a number, and "yesterday" is not one
+main> invoke library:books.burn id=bk-777
+  there is no operation called "library:books.burn" here; `ls` says which there are
 ```
 
 ### Add to section 2, after the verify block: verify does not validate declarations

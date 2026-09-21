@@ -51,6 +51,7 @@ const usage = `sapedb — set up and look inside a database
   sapedb [options] log [FROM]        print the change log from an entry onwards
   sapedb [options] url               print a signed connection string
   sapedb [options] shell [HOST]      look inside a running server
+  sapedb [options] invoke HOST OP    run one declared operation, ARG=VALUE
   sapedb [options] version           which build this is
 
 options
@@ -391,6 +392,25 @@ var commands = []command{
 			// the database an operator wants to look inside is the one
 			// that is serving.
 			return shell(opts, args, in, out)
+		},
+	},
+	{
+		// Not opened, for shell's reason: the database an operation runs
+		// against is the one that is serving, and taking the directory lock
+		// would be taking it away from the server.
+		//
+		// A command of its own rather than "pipe a line into shell", which
+		// already works and is not enough: Shell prints a refusal and carries
+		// on to the next line, so `echo 'invoke ...' | sapedb shell` exits 0
+		// whether the operation ran or was refused. A script cannot branch on
+		// that, and a deployment step that cannot tell a write from a refusal
+		// is the silent failure this product keeps arguing against. This
+		// returns the error, so the status is 1 and stderr says why.
+		name:  "invoke",
+		opens: false,
+		check: checkInvoke,
+		run: func(opts options, _ *store.Store, args []string, _ io.Reader, out io.Writer) error {
+			return invokeOnce(opts, args, out)
 		},
 	},
 	{

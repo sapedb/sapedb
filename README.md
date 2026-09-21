@@ -133,7 +133,11 @@ never disagree with the data it counts.
 can do exactly what an operation could declare, nothing more; it proves it holds
 the server's own secret before it may; every access it makes goes into the
 change log with a name against it; and `declare` prints the operation that would
-do what you just did, so exploring ends in something to commit.
+do what you just did, so exploring ends in something to commit. It also runs the
+operations that are already there — `invoke <name> arg=value` in the shell, or
+`sapedb invoke HOST NAME arg=value` in a script, with the arguments read and
+checked against the declaration — so a module somebody installed is reachable
+without writing a client.
 
 **Build identity** is what a binary answers when asked which one it is. The
 version is written in by the linker from the tag being built, `sapedb version`

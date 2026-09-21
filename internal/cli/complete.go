@@ -39,11 +39,19 @@ func suggest(line string, here store.Catalogue) []string {
 // candidates is everything that could stand in this position.
 func candidates(before []string, here store.Catalogue) []string {
 	if len(before) == 0 {
-		return []string{"count", "declare", "exit", "get", "help", "ls", "scan"}
+		return []string{"count", "declare", "exit", "get", "help", "invoke", "ls", "scan"}
 	}
 
 	switch before[0] {
 	case "get", "scan", "count":
+	case "invoke":
+		// The names the database holds, then the arguments the named
+		// declaration holds. This is the completion this shell is best at and
+		// the one it was missing: an operator who installed a module and does
+		// not know what is in it can reach every operation and every argument
+		// of one without reading the bundle, and nothing offered here was
+		// invented — it all came out of the catalogue.
+		return invokable(before, here)
 	default:
 		// Nothing follows ls, help or exit, and a name for declare is the
 		// operator's to choose — offering one would be inventing it.
@@ -87,6 +95,44 @@ func candidates(before []string, here store.Catalogue) []string {
 	}
 
 	return []string{"after", "before", "fields", "from", "limit", "to"}
+}
+
+// invokable is what could come next in an `invoke` line: the declared names
+// in the operation's position, and the declared argument names after it.
+//
+// An argument already written is not offered again — the shell refuses a
+// repeated argument, so offering one would be offering something that will not
+// work, which this file's whole doc says is worse than offering nothing. A
+// value is never offered, for the same reason values are never offered
+// anywhere else here.
+func invokable(before []string, here store.Catalogue) []string {
+	if len(before) == 1 {
+		names := make([]string, 0, len(here.Operations))
+		for _, operation := range here.Operations {
+			names = append(names, operation.Name)
+		}
+		return names
+	}
+
+	operation, found := declared(here, before[1])
+	if !found {
+		return nil
+	}
+
+	written := map[string]bool{}
+	for _, word := range before[2:] {
+		if at := strings.Index(word, "="); at > 0 {
+			written[word[:at]] = true
+		}
+	}
+
+	names := make([]string, 0, len(operation.Input))
+	for _, parameter := range operation.Input {
+		if !written[parameter.Name] {
+			names = append(names, parameter.Name+"=")
+		}
+	}
+	return names
 }
 
 // lastKeyword is the keyword whose values are still being typed, or "".

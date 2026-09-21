@@ -35,6 +35,7 @@ import (
 // of exploring; exploring that ends in a declaration becomes a schema.
 
 const shellHelp = `  ls                                 what this database holds
+  invoke <name> [arg=value]...       run a declared operation
   get <collection> <key>             one document by its key
   scan <collection> [index] [...]    a stretch of an index
   count <collection> [index] [...]   how many are in that stretch
@@ -49,7 +50,8 @@ const shellHelp = `  ls                                 what this database holds
     fields <a> <b>...     which fields to show
 
   Values are JSON: "a string", 42, true, null.
-`
+
+` + invokeHelp
 
 // Looking is the part of a connection the shell uses. An interface because the
 // shell is worth testing without a server, and because what it needs from a
@@ -57,6 +59,12 @@ const shellHelp = `  ls                                 what this database holds
 type Looking interface {
 	WhatIsHere() (store.Catalogue, error)
 	Explore(store.Access) (wire.Explored, error)
+	// Invoke runs a declared operation, which is the only thing everybody
+	// else's client can do and the one thing this shell could not. It is the
+	// client's own method rather than a second path built here: the shell
+	// composes nothing, it reads a declaration the database already holds and
+	// hands the name and the arguments over.
+	Invoke(name string, arguments map[string]any) (store.Result, error)
 }
 
 // Shell reads lines and runs them until the input ends.
@@ -160,6 +168,13 @@ func one(look Looking, line string, drafted *store.Operation, out io.Writer) (bo
 		}
 		fmt.Fprintln(out, string(encoded))
 		return false, nil, nil
+
+	case "invoke":
+		// No draft comes back and `drafted` is left alone on purpose. The
+		// other three commands end in a declaration because they ran an
+		// access nobody had declared; this one started from one, so there is
+		// nothing for `declare` to print that is not already stored.
+		return false, nil, invoking(look, words, out)
 
 	case "get", "scan", "count":
 		access, err := access(words)

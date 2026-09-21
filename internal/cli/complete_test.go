@@ -21,7 +21,19 @@ func library() store.Catalogue {
 			},
 			{Name: "borrowers", Key: store.Key{Path: "id", Type: store.TypeString}},
 		},
-		Operations: []store.Operation{{Name: "books.add"}},
+		Operations: []store.Operation{
+			{Name: "books.add"},
+			// A namespaced name with arguments, because that is what an
+			// installed module looks like and it is the shape the colon
+			// could have broken.
+			{Name: "library:books.get", Input: []store.Parameter{
+				{Name: "id", Type: store.TypeString, Required: true},
+			}},
+			{Name: "library:books.by_author", Input: []store.Parameter{
+				{Name: "author", Type: store.TypeString, Required: true},
+				{Name: "shelf", Type: store.TypeString},
+			}},
+		},
 	}
 }
 
@@ -34,7 +46,7 @@ func TestWhatTheShellOffersIsWhatWillWork(t *testing.T) {
 		wanted []string
 	}{
 		// Nothing typed: the commands.
-		{``, []string{"count", "declare", "exit", "get", "help", "ls", "scan"}},
+		{``, []string{"count", "declare", "exit", "get", "help", "invoke", "ls", "scan"}},
 		{`s`, []string{"scan"}},
 		{`c`, []string{"count"}},
 
@@ -68,6 +80,26 @@ func TestWhatTheShellOffersIsWhatWillWork(t *testing.T) {
 		// A collection that is not here completes to nothing rather than to
 		// the keywords, which would read as though the name were fine.
 		{`scan nothing `, nil},
+
+		// An invoke completes to the names the database holds, and then to
+		// the arguments the named declaration holds. A namespaced name
+		// completes as one word: the colon is inside it, not a separator
+		// this grammar reads.
+		{`invoke `, []string{"books.add", "library:books.by_author", "library:books.get"}},
+		{`invoke library:`, []string{"library:books.by_author", "library:books.get"}},
+		{`invoke library:books.g`, []string{"library:books.get"}},
+		{`invoke library:books.by_author `, []string{"author=", "shelf="}},
+		{`invoke library:books.by_author author=poe `, []string{"shelf="}},
+		{`invoke library:books.by_author author=poe shelf=a `, nil},
+
+		// An operation nobody declared completes to nothing rather than to
+		// the arguments of some other one — the same rule a collection that
+		// is not here follows, two rows up.
+		{`invoke nothing `, nil},
+
+		// And a value is never completed here either: once the "=" has a
+		// value being typed after it, there is nothing to offer.
+		{`invoke library:books.get id=bk`, nil},
 
 		// And nothing follows the commands that take nothing.
 		{`ls `, nil},
@@ -109,7 +141,7 @@ func TestOneTabMovesAsFarAsEverybodyAgrees(t *testing.T) {
 // names would be worse than silence.
 func TestAnEmptyCatalogueOffersTheCommandsAndNothingElse(t *testing.T) {
 	empty := store.Catalogue{}
-	if got := suggest("", empty); len(got) != 7 {
+	if got := suggest("", empty); len(got) != 8 {
 		t.Errorf("with no catalogue, the commands are %v", got)
 	}
 	if got := suggest("scan ", empty); len(got) != 0 {
@@ -117,6 +149,12 @@ func TestAnEmptyCatalogueOffersTheCommandsAndNothingElse(t *testing.T) {
 	}
 	if got := suggest("scan books ", empty); len(got) != 0 {
 		t.Errorf("with no catalogue, a collection nobody declared offered %v", got)
+	}
+	// And the same for an invoke: a catalogue with no operations in it has
+	// no names to offer, and offering the keywords of some other command
+	// would read as though a name had been accepted.
+	if got := suggest("invoke ", empty); len(got) != 0 {
+		t.Errorf("with no catalogue, operations are %v", got)
 	}
 }
 
