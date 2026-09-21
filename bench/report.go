@@ -124,9 +124,14 @@ func build(records []record) string {
 	fmt.Fprintf(&page, "mean what `fsync` on a cloud provider's network-attached block device means, and this\n")
 	fmt.Fprintf(&page, "store commits per write — so the write numbers below are the ones most exposed to\n")
 	fmt.Fprintf(&page, "that difference, and could move by an order of magnitude in either direction on real\n")
-	fmt.Fprintf(&page, "hardware. That is the reason these numbers are a shape rather than a promise. Read\n")
-	fmt.Fprintf(&page, "the ratios between profiles, and the ratio between insert and delete; do not quote the\n")
-	fmt.Fprintf(&page, "absolute rows/second at anybody.\n\n")
+	fmt.Fprintf(&page, "hardware. That is the reason these numbers are a shape rather than a promise. Do not\n")
+	fmt.Fprintf(&page, "quote the absolute rows/second at anybody.\n\n")
+	fmt.Fprintf(&page, "Which comparisons survive that is not uniform, so it is worth saying once rather than\n")
+	fmt.Fprintf(&page, "leaving a reader to guess. **The ratio between insert and delete holds**: they ran\n")
+	fmt.Fprintf(&page, "minutes apart on the same profile against the same store. **The ratio between profiles\n")
+	fmt.Fprintf(&page, "holds for scan and delete**, where all three profiles agree to within a few percent —\n")
+	fmt.Fprintf(&page, "three independent runs landing on the same number is itself the evidence that the host\n")
+	fmt.Fprintf(&page, "was not moving under them. **It does not hold for insert**; that section says why.\n\n")
 
 	fmt.Fprintf(&page, "## The profiles\n\n")
 	fmt.Fprintf(&page, "Limits read back off the running container with `docker inspect`, not copied from the\n")
@@ -194,6 +199,25 @@ func writePhase(page *strings.Builder, records []record, names []string, phase s
 	}
 	if shape != "" {
 		fmt.Fprintf(page, "%s. %s\n\n", shape, note)
+	}
+
+	// The insert table is the one a reader must not read across. The profiles
+	// run one after another on a host nothing holds still, so a slow patch of
+	// wall-clock time lands entirely on whichever profile is running then and
+	// arrives looking like a property of its limits. This warning is emitted
+	// by the generator rather than written into a results file, because a
+	// caveat that lives in a different document than the table it qualifies is
+	// one copy-paste away from being gone. If the profile order is ever
+	// interleaved or repeated, delete this — but delete it because the run
+	// changed, not because the numbers came out tidier.
+	if phase == "insert" {
+		fmt.Fprintf(page, "**Do not compare these three rows against each other.** Each profile was measured\n")
+		fmt.Fprintf(page, "in turn on one host over tens of minutes, with nothing holding that host still, so\n")
+		fmt.Fprintf(page, "position in the run and profile identity are the same variable — and the giveaway is\n")
+		fmt.Fprintf(page, "that the numbers fall as the limits get *larger*, which is not something more cpu and\n")
+		fmt.Fprintf(page, "more memory can do. Read each row as what one profile cost on one occasion. The scan\n")
+		fmt.Fprintf(page, "and delete tables below do not have this problem: there the three profiles agree, and\n")
+		fmt.Fprintf(page, "agreement across separated runs is evidence rather than coincidence.\n\n")
 	}
 
 	fmt.Fprintf(page, "| profile | rows/s min | rows/s median | rows/s max | request ms median | request ms p99 | request ms max | peak container memory |\n")

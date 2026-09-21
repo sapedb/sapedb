@@ -97,6 +97,18 @@ recorded, so its absence is not a claim that nothing changed before it.
   Docker Desktop on macOS is a Linux VM whose disk is not a VPS's, which is why
   these are shapes rather than promises.
 
+  **The report now says which comparisons it supports, because it used to say
+  the wrong one.** It told the reader to "read the ratios between profiles" —
+  and for insert that is the one ratio the run cannot support: the three
+  profiles are measured in turn on a host nothing holds still, so position in
+  the run and profile identity are the same variable, and the giveaway is that
+  insert gets *slower* as the limits get larger. `bench/README.md` said so; the
+  report did not, and the report is the document people read. The warning is now
+  emitted by the generator directly above the insert table, so it cannot be
+  separated from the numbers it qualifies. Scan and delete keep the cross-profile
+  comparison: there the three agree to within a few percent, and three separated
+  runs landing on the same number is the evidence that the host was steady.
+
   **What the first run found, and it is not the number anyone expected to care
   about.** Steady-state memory for this workload never left 16–20 MiB on any
   profile, 512m included: the store is not what fills a small machine. What
