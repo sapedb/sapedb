@@ -352,10 +352,53 @@ func showCatalogue(here store.Catalogue, out io.Writer) {
 			fmt.Fprintf(out, "    index %s (%s)\n", index.Name, strings.Join(fields, ", "))
 		}
 	}
+
+	// Keyed by name and version rather than read by position: Catalogue's own
+	// doc only promises Envelopes rides alongside Operations in the same
+	// order, and the fake Looking this package's own tests hand the shell is
+	// not bound by that promise either. A catalogue with no envelope for an
+	// operation (a Looking that predates SAPE-8, or simply none supplied)
+	// still shows the operation, just without the lines below it.
+	envelopes := make(map[string]store.Envelope, len(here.Envelopes))
+	for _, envelope := range here.Envelopes {
+		envelopes[envelopeKey(envelope.Operation, envelope.Version)] = envelope
+	}
+
 	for _, operation := range here.Operations {
 		fmt.Fprintf(out, "  operation %s v%d %s %s\n",
 			operation.Name, operation.Version, operation.Action, operation.Collection)
+
+		envelope, found := envelopes[envelopeKey(operation.Name, operation.Version)]
+		if !found {
+			continue
+		}
+		// The SAPE-8 facts a caller needs before running an operation it did
+		// not write, without running it: the real ceiling (never the
+		// declaration's own Limit field, which is ambiguous or absent for
+		// exactly the actions this matters most for — see Envelope's own
+		// doc), and everything it reaches through composed steps rather than
+		// only what its own Collection/Index fields name.
+		fmt.Fprintf(out, "    limit %d, collections [%s], indexes [%s]\n",
+			envelope.Limit, strings.Join(envelope.Collections, ", "), strings.Join(envelope.Indexes, ", "))
+		switch {
+		case envelope.WholeDocument:
+			fmt.Fprintln(out, "    whole document escapes")
+		case len(envelope.Projection) > 0:
+			fmt.Fprintf(out, "    projection [%s] escapes\n", strings.Join(envelope.Projection, ", "))
+		default:
+			fmt.Fprintln(out, "    nothing escapes")
+		}
+		if len(envelope.Scopes) > 0 {
+			fmt.Fprintf(out, "    scopes %s\n", strings.Join(envelope.Scopes, ", "))
+		}
 	}
+}
+
+// envelopeKey is how showCatalogue matches an Envelope to the Operation it
+// describes: the same (name, version) pair Envelope.Operation/Version and
+// Operation.Name/Version both carry.
+func envelopeKey(name string, version int) string {
+	return fmt.Sprintf("%s@%d", name, version)
 }
 
 // connect makes this tool's own connection string and opens it.
