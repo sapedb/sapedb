@@ -187,16 +187,119 @@ The server refuses to start without TLS unless `SAPEDB_INSECURE=1` says you mean
 it. The Docker image ships the server binary and nothing else — no shell, no
 package manager, no libc.
 
-### Installing a signed bundle
+### Publishing a signed bundle
 
 A bundle is the same two lists `sapedb apply` reads — collections and
-operations — with a name, an author and an ed25519 signature on them. It
-carries no code, so a verified bundle widens what a database holds, never what
-the server is able to do.
+operations — with a name, an author and an ed25519 signature on them. There is
+no separate declaration language for an author to learn: a draft is a schema
+file with three strings in front of it.
 
-    export SAPEDB_TRUST='acme-eng=3f0b…64 hex chars, partner-co=9c1d…64 hex chars'
-    sapedb verify ledger-pack.bundle
-    sapedb install ledger-pack.bundle
+    {
+      "name": "orders-pack",
+      "version": "3.4.0",
+      "signer": "Orders Authors",
+      "collections": [ ... ],
+      "operations":  [ ... ]
+    }
+
+`keygen` makes the identity and `seal` signs a draft with it. The private key
+is never printed and never an argument: `keygen` writes it into the file you
+name, refuses to write over anything already there, creates it mode 0600, and
+prints only the public half — one line, 64 lower-case hex characters, which is
+exactly what `SAPEDB_TRUST` takes. `seal` reads the private key back on stdin,
+so the key can come out of a secret store and never touch disk at all.
+
+    $ sapedb keygen orders.key
+    2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64
+
+    $ ls -l orders.key
+    -rw-------  1 ngvcanh  wheel  129 Sep 21 07:37 orders.key
+
+    $ sapedb seal orders.draft.json orders.bundle < orders.key
+    sealed orders.bundle, signed by 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64
+
+The hex above is a real public key from a real run of these commands, kept so
+the output below is what the commands actually print. It is a throwaway: its
+private half was generated in a scratch directory, never existed in this
+repository, and has been deleted. A public key is meant to be published — that
+is the whole point of the line — and there is no private key anywhere in this
+repository, in a test, a fixture or a document.
+
+Send `orders.bundle` and that one line of hex to whoever runs the server. A new
+author joins an operator's trust list in one command:
+
+    export SAPEDB_TRUST="orders-authors=$(sapedb keygen orders.key)"
+
+Neither command opens a database, needs `SAPEDB_SECRET`, or touches the
+network — an author signing a release is usually not an operator of anything.
+
+`seal` refuses a draft it would have to lie about: one carrying a field this
+version does not read, one claiming some other format, and one that already
+carries a signature. None of those is re-signed quietly.
+
+There is no key rotation, no revocation, and no registry. Replacing an author's
+key means an operator editing `SAPEDB_TRUST` by hand, and bundles already
+installed stay installed — what a bundle declared is indistinguishable
+afterwards from a declaration somebody wrote by hand, and there is no uninstall.
+
+### Installing a signed bundle
+
+It carries no code, so a verified bundle widens what a database holds, never
+what the server is able to do.
+
+    $ export SAPEDB_TRUST="orders-authors=2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64"
+
+    $ sapedb verify orders.bundle
+    bundle "orders-pack" version "3.4.0"
+
+      read      yes  sapedb/bundle:v1
+      signed    yes  ed25519, key 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64
+      intact    yes  the signature is over exactly these declarations
+      trusted   yes  an operator of this server put that key on the list
+
+      says it is "Orders Authors" (the bundle's own claim about its author)
+      known as  "orders-authors" (what an operator of this server called that key)
+
+    declares
+      collection orders (key id string, ulid)
+        index by_customer [customer string missing:skip, placed number desc missing:last]
+      operation orders.add insert orders
+      operation orders.by_customer scan orders via by_customer limit 25 scopes orders:read
+
+    $ sapedb install orders.bundle
+    installing bundle "orders-pack" version "3.4.0", signed by 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64, trusted here as "orders-authors"
+    collection orders
+    operation orders.add version 1
+    operation orders.by_customer version 1
+
+    $ sapedb ls
+    collection orders (key id string, ulid)
+      index by_customer [customer string missing:skip, placed number desc missing:last]
+    operation orders.add v1 insert orders
+    operation orders.by_customer v1 scan orders via by_customer limit 25 scopes orders:read
+    log 1..3
+
+Two refusals, both worth seeing, because the reports say which of them
+happened. A bundle whose key is not on this server's list:
+
+      signed    yes  ed25519, key 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64
+      intact    yes  the signature is over exactly these declarations
+      trusted   no   no operator of this server put that key on the list
+
+      says it is "Orders Authors" (the bundle's own claim about its author)
+      known as  nothing on this server
+
+    declares (nothing below is vouched for: the checks above did not pass)
+
+and a bundle somebody edited after it was sealed — here `"limit": 25` rewritten
+to `"limit": 900`, which is the declaration of what an operation costs:
+
+      signed    yes  ed25519, key 2017d976ee5786f34d78b4c1eb331cfb55ff7fbb04b5e13afcdbc78cf9171d64
+      intact    no   these are not the declarations that key signed
+      trusted   -    not reached; the signature did not check out
+
+Both exit 1, and `install` refuses the file before the database is opened at
+all.
 
 `SAPEDB_TRUST` is whose bundles this host will look at, written `label=key`
 and separated by commas or newlines. Unset is an empty list, and an empty list

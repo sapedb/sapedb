@@ -78,6 +78,67 @@ recorded, so its absence is not a claim that nothing changed before it.
   `%w` and intact, so `internal/server`'s `codeFor` still names it
   `incompatible` rather than `failed`.
 
+- **An author can now produce a bundle without writing Go (SAPE-12).** SAPE-28
+  shipped `verify` and `install` and ended its own report with the gap: nothing
+  in the shipped binary could *produce* a bundle, so an author outside this
+  repository had to write Go against `bundle.Seal`. A feature with a consumer
+  and no producer is a feature nobody can use. These are the two commands that
+  close it, and neither opens a database, needs `SAPEDB_SECRET` or touches the
+  network — an author signing a release is usually not an operator of anything.
+
+  **`sapedb keygen FILE`** makes an ed25519 identity. The private half goes
+  into `FILE`, created with `O_EXCL` and mode `0600`; the public half is
+  printed on stdout, one line, 64 lower-case hex characters — which is exactly
+  what `SAPEDB_TRUST` takes, so
+  `SAPEDB_TRUST="acme-eng=$(sapedb keygen acme.key)"` is the whole of getting a
+  new author onto an operator's list. The private key is **never** printed: a
+  command that writes one to stdout writes it into the scrollback of every
+  author who forgets the redirect and into the log of every pipeline that runs
+  it, silently, because the key still works afterwards. A path that is already
+  taken is refused rather than overwritten — a signing identity that gets
+  clobbered cannot be recovered, and every bundle it ever signed stops being
+  attributable to anybody.
+
+  **`sapedb seal DRAFT FILE`** signs a draft into a bundle, reading the private
+  key from **stdin**. Not an argument (this package's existing rule: argv is
+  visible to anyone who can run `ps`) and not the environment; stdin means the
+  key need never exist on disk at all —
+  `vault read -field=key … | sapedb seal orders.draft.json orders.bundle` is a
+  complete release step. `< acme.key` is the simple case of the same thing.
+
+  **A draft is a bundle without its signature, and no second declaration
+  syntax was invented.** It is the `{"collections": …, "operations": …}` that
+  `sapedb apply` already reads, with `name`, `version` and `signer` in front of
+  it, which is what a bundle was always defined to be. An author who already
+  deploys with `apply` adds three strings to the file they have. It is read
+  through `bundle.Parse`, so a draft is held to the same rule a bundle is on
+  the way in — unknown fields refused, one document per file — because a field
+  this version does not read is a field the author believes is doing something.
+  A draft claiming some other `format`, and a draft that already carries a
+  signature, are both refused rather than quietly relabelled or re-signed.
+
+  `bundle.PublicKeyText`, `bundle.PrivateKeyText` and `bundle.ParsePrivateKey`
+  are the one place a key is written down, so the command that produces a key
+  and the parser that reads a trust list cannot drift into two spellings.
+  `ParsePrivateKey` trims surrounding whitespace (a key out of a file or a pipe
+  carries a newline nobody typed) and quotes **nothing** back in its refusal,
+  unlike every other parser here: a private key that failed to parse is still a
+  private key, and the usual courtesy of showing what was read would put a live
+  secret in a terminal.
+
+  Measured end to end through the real commands, not the functions: keygen →
+  seal → `SAPEDB_TRUST` → `verify` reporting `trusted yes` → `install` → `ls`
+  reading the operations back, plus the change log naming the bundle and the
+  key. Both negative halves are in the same file — a bundle sealed with a
+  different key is refused as untrusted while the signature still checks out,
+  and a bundle edited after sealing (its version, and separately an
+  operation's `limit`) is refused as not intact. Every key in those tests is
+  generated at run time by the command under test; there is not one key
+  literal in this repository.
+
+  Not built, and deliberately: key rotation, revocation, a registry, and
+  anything over the wire.
+
 - **`sapedbd` reloads part of its configuration on SIGHUP, and says exactly
   what it did (SAPE-7).** `SAPEDB_SHUTDOWN` and a rotated
   `SAPEDB_TLS_CERT`/`SAPEDB_TLS_KEY` pair take effect without a restart, with

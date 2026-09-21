@@ -41,6 +41,8 @@ const passwordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 const usage = `sapedb — set up and look inside a database
 
   sapedb [options] apply FILE...     declare collections and operations
+  sapedb [options] keygen FILE       make a signing identity, FILE keeps it
+  sapedb [options] seal DRAFT FILE   sign declarations into a bundle
   sapedb [options] verify FILE       check a signed bundle, and say what it holds
   sapedb [options] install FILE      declare everything a signed bundle holds
   sapedb [options] ls                what this database holds
@@ -69,7 +71,9 @@ list refuses every bundle and says so — there is no spelling that means
 
 A password is never taken as an argument: arguments are visible to anyone who
 can run ps. "url" makes one and prints it as part of the connection string,
-or reads one from stdin when told to.
+or reads one from stdin when told to. A signing key is not an argument either:
+"keygen" writes the private half into the file named and prints only the
+public half, and "seal" reads the private half from stdin.
 `
 
 var (
@@ -275,6 +279,33 @@ var commands = []command{
 		check: checkApply,
 		run: func(opts options, db *store.Store, args []string, _ io.Reader, out io.Writer) error {
 			return apply(db, args, out, store.Caller{Actor: opts.account + " (apply)"})
+		},
+	},
+	{
+		// Standalone for verify's reason carried one step further: keygen
+		// is about a file it creates and nothing else, and the author
+		// running it is very often not an operator of any server — asking
+		// them for a secret, an account and a database name would be asking
+		// for three things that do not exist on their machine. See
+		// author.go for why the private half goes to a file and only the
+		// public half to stdout.
+		name:       "keygen",
+		standalone: true,
+		check:      checkKeygen,
+		run: func(_ options, _ *store.Store, args []string, _ io.Reader, out io.Writer) error {
+			return keygen(args[0], out)
+		},
+	},
+	{
+		// Standalone for the same reason, and the only command in this
+		// table that reads a secret from stdin without opening anything:
+		// the signing key is the author's, not this host's, and SAPEDB_DIR
+		// is nowhere in it.
+		name:       "seal",
+		standalone: true,
+		check:      checkSeal,
+		run: func(_ options, _ *store.Store, args []string, in io.Reader, out io.Writer) error {
+			return seal(args[0], args[1], in, out)
 		},
 	},
 	{

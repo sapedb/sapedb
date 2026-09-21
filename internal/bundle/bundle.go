@@ -314,6 +314,66 @@ func publicKey(value string) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(raw), nil
 }
 
+// PublicKeyText is a public key written the way SAPEDB_TRUST wants it: 64
+// lower-case hex characters, and nothing else.
+//
+// It exists so that the one command that produces a key and the one parser
+// that reads a trust list cannot drift apart into two spellings. There is no
+// second form — no base64, no PEM, no prefix — for the reason lowerHex refuses
+// upper case: a key with two spellings is a key an operator can put on a trust
+// list in a form that never matches the one inside a bundle.
+func PublicKeyText(key ed25519.PublicKey) (string, error) {
+	if len(key) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("%w: a public key is %d bytes, not %d", ErrKey, ed25519.PublicKeySize, len(key))
+	}
+	return hex.EncodeToString(key), nil
+}
+
+// PrivateKeyText is a private key written in the same alphabet as the public
+// one: 128 lower-case hex characters, being the 64 bytes ed25519 calls a
+// private key (the 32-byte seed with the public half appended).
+//
+// Hex rather than anything richer, and no armour, header or comment around it,
+// because the file this lands in is read back by ParsePrivateKey and by
+// nothing else. A format with a header is a format with a version, a parser
+// and a migration; this product's whole key story is "64 bytes, and whoever
+// holds them is the author", and a file that says more than that would be
+// claiming more than that.
+func PrivateKeyText(key ed25519.PrivateKey) (string, error) {
+	if len(key) != ed25519.PrivateKeySize {
+		return "", fmt.Errorf("%w: a private key is %d bytes, not %d", ErrKey, ed25519.PrivateKeySize, len(key))
+	}
+	return hex.EncodeToString(key), nil
+}
+
+// ParsePrivateKey reads back what PrivateKeyText wrote.
+//
+// Surrounding whitespace is trimmed and nothing else is: a key that arrives
+// from a file written by an editor, from `echo`, or down a pipe carries a
+// trailing newline that nobody typed, and refusing it would be refusing the
+// key for something that is not part of it. Whitespace INSIDE the key is not
+// trimmed, so a key with a line break through the middle is refused rather
+// than silently re-joined into a different key.
+//
+// The refusal deliberately quotes nothing back. Every other parser here puts
+// the offending value in its error, which is right for a public key, a label
+// or a bundle field and wrong for exactly this one: a private key that failed
+// to parse is still a private key, and the usual courtesy of showing what was
+// read would put a live secret in a terminal and a log. So the error says how
+// long the input was and what shape was wanted, which is everything an author
+// needs to fix it, and never a character of it. That is also why lowerHex's
+// own error is summarised rather than wrapped — hex.DecodeString names the
+// byte it choked on, and that byte is part of the key.
+func ParsePrivateKey(text string) (ed25519.PrivateKey, error) {
+	trimmed := strings.TrimSpace(text)
+	raw, err := lowerHex(trimmed, ed25519.PrivateKeySize)
+	if err != nil {
+		return nil, fmt.Errorf("%w: a private key is %d lower-case hex characters, and this is %d characters that do not read as that",
+			ErrKey, ed25519.PrivateKeySize*2, len(trimmed))
+	}
+	return ed25519.PrivateKey(raw), nil
+}
+
 // printable reports whether a field can be put in an error or a log without
 // mangling it. It is the only rule on a name, a version or a signer: no
 // character is banned for the encoding's sake, because the encoding counts

@@ -541,6 +541,8 @@ var pinnedPhrases = map[string]string{
 	"apply/broken json":               "unexpected EOF",
 	"apply/unknown field":             `json: unknown field "unexpectedField"`,
 	"apply/conflicting redeclaration": `collection "articles": sapedb/store:`,
+	"keygen/no file":                  "keygen takes one file to write the private key into",
+	"seal/wrong arguments":            "seal takes a draft file and a bundle file",
 	"verify/no file":                  "verify takes one bundle file",
 	"install/no file":                 "install takes one bundle file",
 	"log/not a number":                "is not an entry number",
@@ -1652,7 +1654,13 @@ type rejectionCase struct {
 // P6's (checkURL cut from the table) red set, for the identical reason case
 // 16 was rewritten for, above.
 var rejectionCases = map[string]rejectionCase{
-	"apply":   {args: []string{"apply"}, wants: "apply needs a file"},
+	"apply":  {args: []string{"apply"}, wants: "apply needs a file"},
+	"keygen": {args: []string{"keygen"}, wants: "keygen takes one file to write the private key into"},
+	// Three arguments rather than none, so this row is refused by the count
+	// rule itself and not by the draft it would otherwise go on to read: a
+	// case that is really testing os.ReadFile would still be red if checkSeal
+	// lost its count rule entirely.
+	"seal":    {args: []string{"seal", "a.json", "b.bundle", "c"}, wants: "seal takes a draft file and a bundle file"},
 	"verify":  {args: []string{"verify"}, wants: "verify takes one bundle file"},
 	"install": {args: []string{"install"}, wants: "install takes one bundle file"},
 	"ls":      {args: []string{"ls", "junk"}, wants: "ls takes no arguments"},
