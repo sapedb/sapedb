@@ -15,7 +15,7 @@ tagged `already true, already measured` (**Name collisions**) and `this one land
 temporary path, it is the real one from that run.
 
 The worked module is `examples/library/module.json` in the `sapedb` repository: a lending
-library, with three collections, four indexes, one rollup and nine operations. It is a
+library, with three collections, five indexes, one rollup and nine operations. It is a
 module rather than a missing verb, which is what the revised SAPE-12 asks for.
 
 House markup, copied from `learn/declaring-operations.html`:
@@ -73,7 +73,7 @@ behind. It carries <strong>no dependency</strong> on another bundle. And it says
 every server whose operator trusts its author.</p>
 
 <p>A worked example ships in the repository at <code>examples/library/module.json</code>: a
-lending library, in three collections with four indexes and one rollup, and nine operations
+lending library, in three collections with five indexes and one rollup, and nine operations
 across five of the nine actions. It is deliberately a whole small module rather than one
 missing verb, because a module is the hard case &mdash; it has to bring its own storage.</p>
 

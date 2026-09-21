@@ -66,7 +66,7 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 - **A worked external-operation module, and the tests that keep it honest
   (SAPE-12).** `examples/library/module.json` is a lending library: three
-  collections with their own keys, four indexes, one rollup, and nine
+  collections with their own keys, five indexes, one rollup, and nine
   operations across five of the nine actions. It is deliberately a whole small
   module rather than one missing verb, because a module is the hard case — it
   has to bring its own storage, and until SAPE-14 shipped `establish` it could
