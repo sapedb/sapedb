@@ -170,6 +170,28 @@ type Operation struct {
 	// carry one. Omitted rather than zero, because a file saying version 0
 	// claims something nobody gave it.
 	Version int `json:"version,omitempty"`
+
+	// DeclaredBy is the identity that declared THIS version, assigned by the
+	// store from the Caller in the same breath as Version and for the same
+	// reason: it is a fact about the act of declaring, not a field of the
+	// declaration somebody wrote. Whatever a caller sends here is discarded —
+	// a field a client can set is a field a client can lie in.
+	//
+	// Optional, and a pointer so that absent is a state the wire can hold. It
+	// has to be: every operation declared before this field existed is stored
+	// without it, and reading one back must not invent a declarer it never
+	// had. An absent value stays legal for the life of 1.x.
+	//
+	// Redeclaring records the identity that made the new version. Older
+	// versions keep theirs, because old versions are kept rather than
+	// replaced — which is the whole reason an audit record naming an operation
+	// version is still readable years later, and this field is what makes that
+	// record say who as well as what.
+	//
+	// It survives a dump and a restore, unlike the change log's Attribution,
+	// because a dump carries the Operation itself. That is the point of
+	// putting it here. See declarer.go.
+	DeclaredBy *Declarer `json:"declaredBy,omitempty"`
 }
 
 // Parameter is one declared argument.
@@ -394,6 +416,13 @@ func (s *Store) DeclareOperation(caller Caller, operation Operation) (Operation,
 	if found {
 		operation.Version = latest.Version + 1
 	}
+	// Assigned here rather than taken from what arrived, and assigned
+	// unconditionally — including to nil, when the caller names nobody — so
+	// that a declaration which turns up with the field already filled cannot
+	// keep it. Same rule as Version on the line above: both are the store's
+	// account of the act, and a caller writing either one would be writing
+	// their own audit record.
+	operation.DeclaredBy = declarerOf(caller)
 
 	encoded, err := json.Marshal(operation)
 	if err != nil {

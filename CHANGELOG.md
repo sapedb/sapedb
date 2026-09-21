@@ -104,6 +104,71 @@ recorded, so its absence is not a claim that nothing changed before it.
   Every expectation in that file is typed out on the test side. None of it is
   read out of `module.json` and compared against itself.
 
+- **A declaration now records the identity that declared it (ISS-32).**
+  `store.Operation` gains one optional field, `declaredBy`, carrying a kind and
+  an identity: the ed25519 key that signed the bundle a declaration arrived in,
+  or the caller's actor otherwise. SAPE-9 recorded who owns a *namespace*, in a
+  record of its own; it put nothing on the declaration.
+
+  **It had to land before 1.0.0.** COMPATIBILITY.md section 3 does permit a 1.x
+  to add an optional field to a declaration, so the rule could wait — but the
+  field could not. A declaration is stored *inside the database*, so every
+  operation declared between the tag and some later release would be one this
+  field could never be filled in for. There is no migration that invents an
+  identity nobody wrote down.
+
+  **Why on the declaration rather than in the log.** The change log already
+  carries an `Attribution` for every declare, and it is not enough for two
+  reasons that are both measured. A log is trimmed: `Retain` drops the entry
+  naming the declarer while the declaration it describes stays stored, which is
+  `internal/store`'s `TestTheLogEntryNamingADeclarerIsPrunable`. And a dump
+  carries no log at all — `dump.go`'s `line` has no attribution anywhere on it
+  and `Restore` handles only collections, operations and documents — so a
+  replica built from a dump held every declaration and knew who wrote none of
+  them. In the unnamed namespace, where there is no claim record either, the
+  answer was simply gone. The field survives both, because a dump carries the
+  whole `Operation`; `TestTheDeclarerSurvivesADumpAndRestore` dumps a database,
+  restores into an empty one and reads the identities back out.
+
+  **The store sets it, never the caller.** Whatever arrives in the field is
+  discarded and replaced, in the same breath as `Version` and for the same
+  reason: a field a client can set is a field a client can lie in, and this one
+  would be worth lying in. A declaration submitted with somebody else's key in
+  it comes back recorded against whoever actually declared it, and one
+  submitted through a caller that names nobody comes back with no declarer at
+  all rather than keeping the forged value.
+
+  **Absent stays legal.** The field is `omitempty` and a pointer, so a
+  declaration stored before this existed reads back without one and does not
+  grow a value it never had, and a caller that names nobody writes no field.
+  Redeclaring records the identity that made *that* version; older versions
+  keep theirs, which is what makes an audit record naming an operation version
+  still answerable years later.
+
+  **It is a record, not a rule.** Nothing reads it to decide anything. Who may
+  declare into a namespace is still settled by `claimFor` against the claim
+  records SAPE-9 added, and writing the holder's identity into a submitted
+  declaration does not get a stranger past it.
+
+  **One behaviour changed outside the store.** `internal/cli`'s `sameOperation`
+  — the comparison behind `apply` and `install` skipping a declaration that is
+  already there unchanged — now ignores `declaredBy` as it already ignored
+  `version`. Without that, a stored declaration differs from every file that
+  produced it and `apply` run twice writes a second version of everything. The
+  consequence, deliberate: an identical declaration re-applied by somebody else
+  keeps the identity already on it, because nothing was declared.
+
+  **`fixtures/frames.json` is unchanged, and no client's copy needs syncing.**
+  That artifact marks the declare frame's `operation` field
+  `"opaque": "internal/store.Operation"` and has never carried a field table
+  for a declaration — the shapes it spells out are the top-level fields of each
+  request frame's own struct, and `declaring` did not gain one.
+
+  **Known limitation, unchanged from SAPE-9:** a dump still does not carry
+  namespace *claims*. A restored database knows who declared each operation and
+  still comes back with every namespace unclaimed. That remains a dump-format
+  change and its own ticket.
+
 - **A signed bundle can now be checked and installed (SAPE-28).** SAPE-10
   could seal and verify one and stopped there: nothing read a trusted key out
   of any configuration, and none of the six `bundle_*` refusal codes in

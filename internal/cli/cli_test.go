@@ -178,6 +178,102 @@ func TestApplyingTwiceChangesNothing(t *testing.T) {
 	}
 }
 
+// TestApplyRecordsTheAccountOnTheDeclarationItself pins what ISS-32's
+// DeclaredBy does to `apply` at both ends: what lands in the database, and
+// what the skip above compares.
+//
+// The declarer goes in the dump, which is the point of the field — the change
+// log knows too, and a dump carries no log, so a replica built from one would
+// otherwise hold every declaration and know who wrote none of them.
+//
+// The version number is the other half, and it is the half that broke first.
+// A schema file never carries a declaredBy; a stored declaration now always
+// does; so unless sameOperation ignores the field, every stored declaration
+// differs from the file that produced it and `apply` run twice writes a second
+// version of everything. Same account both times is enough to catch that,
+// because the comparison fails on the field being PRESENT on one side, not on
+// the two identities differing.
+//
+// Cross-identity is not reachable from here and is covered as a unit instead,
+// in TestSameOperationIgnoresWhatTheStoreAssigns: `apply`'s database path is
+// filepath.Join(dir, account, db), so a second account is a second database.
+func TestApplyRecordsTheAccountOnTheDeclarationItself(t *testing.T) {
+	setup := start(t)
+	file := setup.write("schema.json", articles)
+
+	if _, errs, status := setup.run("apply", file); status != 0 {
+		t.Fatalf("first apply: %s", errs)
+	}
+
+	dumped, errs, status := setup.run("dump")
+	if status != 0 {
+		t.Fatalf("dump: %s", errs)
+	}
+	// The known-positive: the dump is the database under test and it does hold
+	// the operations, so an identity missing below is missing rather than
+	// being looked for in the wrong place.
+	if !strings.Contains(dumped, `"name":"articles.add"`) {
+		t.Fatalf("the dump does not hold articles.add at all, so nothing below is measured:\n%s", dumped)
+	}
+	if !strings.Contains(dumped, `"declaredBy":{"kind":"actor","identity":"acme (apply)"}`) {
+		t.Errorf("the dumped declaration does not name the account that applied it:\n%s", dumped)
+	}
+
+	// Applying again must still change nothing, and the reason it is asserted
+	// here as well as in TestApplyingTwiceChangesNothing is that this is where
+	// the declaration is known to carry a field the file does not.
+	out, errs, status := setup.run("apply", file)
+	if status != 0 {
+		t.Fatalf("second apply: %s", errs)
+	}
+	if !strings.Contains(out, "articles.add unchanged at version 1") {
+		t.Errorf("a second apply of a declaration carrying a declarer printed %q — the declarer is being compared against a file that has none", out)
+	}
+}
+
+// TestSameOperationIgnoresWhatTheStoreAssigns is the comparator on its own,
+// with the case `apply` cannot reach: the same declaration already stored
+// against somebody ELSE.
+//
+// Both literals are written out here rather than built by declaring anything,
+// so this measures what the function does with two Operations rather than what
+// some path happens to hand it.
+func TestSameOperationIgnoresWhatTheStoreAssigns(t *testing.T) {
+	// What a schema file produces: no version, no declarer.
+	fromFile := store.Operation{
+		Name: "articles.add", Collection: "articles", Action: "insert", Limit: 0,
+	}
+
+	// What is stored, with both of the store's own assignments on it — and an
+	// identity that is not the one running now, which is the case a same-
+	// account test cannot tell apart from the field being ignored.
+	stored := store.Operation{
+		Name: "articles.add", Collection: "articles", Action: "insert",
+		Version:    4,
+		DeclaredBy: &store.Declarer{Kind: "key", Identity: "9f2c"},
+	}
+	if !sameOperation(stored, fromFile) {
+		t.Error("a declaration already stored against another identity reads as changed — applying an unchanged file would write a new version of it")
+	}
+
+	// A declarer on the incoming side is ignored too, in the other direction:
+	// nothing may get a skip by claiming to already be what is stored.
+	forged := fromFile
+	forged.DeclaredBy = &store.Declarer{Kind: "actor", Identity: "mallory"}
+	if !sameOperation(stored, forged) {
+		t.Error("a declaration carrying a declarer of its own reads as changed — the field is on both sides of the comparison")
+	}
+
+	// The positive control, and it is the assertion that stops every line
+	// above from passing on a function that returns true unconditionally: a
+	// real difference still reads as a difference.
+	changed := fromFile
+	changed.Action = "put"
+	if sameOperation(stored, changed) {
+		t.Error("a declaration whose action changed reads as unchanged — the comparison is ignoring everything")
+	}
+}
+
 func TestADeclarationThatMakesNoSenseIsRefusedWithItsName(t *testing.T) {
 	setup := start(t)
 

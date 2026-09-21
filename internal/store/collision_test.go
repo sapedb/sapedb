@@ -174,13 +174,21 @@ func TestWhatIsHereShowsOnlyTheNewestVersionOfAName(t *testing.T) {
 	}
 }
 
-// TestNothingOnAStoredDeclarationSaysWhoDeclaredIt is the measurement behind
-// the dossier's claim that a namespace bound to whoever declared a name has
-// nothing to bind to today.
+// TestAStoredDeclarationSaysWhoDeclaredItAndTheLogAgrees replaces
+// TestNothingOnAStoredDeclarationSaysWhoDeclaredIt, which measured the gap
+// ISS-32 closed: the change log knew who declared an operation and the
+// declaration itself did not, so the answer vanished with the log — under a
+// Retain cap, or through a dump and restore, which carries no log at all. See
+// the note under "Does anything record who declared each version" in
+// docs/namespaces.md, which is where the old test's output is quoted.
 //
-// The change log knows. The declaration does not, and the declaration is what
-// WhatIsHere hands out and what a caller resolves a name against.
-func TestNothingOnAStoredDeclarationSaysWhoDeclaredIt(t *testing.T) {
+// Deleting the old assertion rather than keeping both, because the old one was
+// the claim that a field is absent and the field is now there; the two cannot
+// simultaneously be true. What is kept is the part that is still worth
+// measuring and is stronger than either half alone: the declaration and the
+// log have to name the SAME declarer. Two records of one fact that can drift
+// apart are worse than one record, and nothing else would notice if they did.
+func TestAStoredDeclarationSaysWhoDeclaredItAndTheLogAgrees(t *testing.T) {
 	store, _ := declared(t, 902)
 
 	if _, err := store.DeclareOperation(Caller{Actor: "vendor-a"}, collidingRead("orders.recent")); err != nil {
@@ -200,23 +208,28 @@ func TestNothingOnAStoredDeclarationSaysWhoDeclaredIt(t *testing.T) {
 	if !strings.Contains(string(encoded), `"name":"orders.recent"`) {
 		t.Fatalf("the encoded declaration is not the one declared: %s", encoded)
 	}
-	if strings.Contains(string(encoded), "vendor-a") {
-		t.Errorf("the stored declaration names its declarer: %s — if this is now true, the namespace options in docs/namespaces.md have more to work with than that document says", encoded)
+	if !strings.Contains(string(encoded), "vendor-a") {
+		t.Errorf("the stored declaration does not name its declarer: %s", encoded)
 	}
 
+	// One spelling, and only one. Two fields carrying the same fact is how a
+	// reader ends up asking which of them wins; the alternatives swept here
+	// are the names a second one would plausibly arrive under.
 	fields := map[string]any{}
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
+	if _, carries := fields["declaredBy"]; !carries {
+		t.Errorf("the stored declaration has no declaredBy field: %s", encoded)
+	}
 	for _, field := range []string{"actor", "by", "owner", "declared_by", "namespace", "vendor"} {
 		if _, carries := fields[field]; carries {
-			t.Errorf("a stored declaration carries a %q field — docs/namespaces.md says it carries none", field)
+			t.Errorf("a stored declaration carries a %q field as well as declaredBy — two records of one fact", field)
 		}
 	}
 
-	// And the contrast: the log does know, so "nobody records it" would be
-	// the wrong claim to make. What the log cannot do is answer a caller
-	// resolving a name.
+	// The log still knows too, and it has to agree. This was the contrast the
+	// old test drew; it is now an equality.
 	actors := map[int]string{}
 	entries := 0
 	if err := store.Changes(0, func(change Change) bool {
@@ -229,10 +242,17 @@ func TestNothingOnAStoredDeclarationSaysWhoDeclaredIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	if entries == 0 {
-		t.Fatal("the change log walk found no entries at all — the contrast below is measuring nothing")
+		t.Fatal("the change log walk found no entries at all — the comparison below is measuring nothing")
 	}
 	if actors[1] != "vendor-a" {
 		t.Errorf("the log records version 1 as declared by %q, want %q", actors[1], "vendor-a")
+	}
+	if stored.DeclaredBy == nil {
+		t.Fatalf("the declaration carries no declarer while the log says %q", actors[1])
+	}
+	if stored.DeclaredBy.Identity != actors[1] {
+		t.Errorf("the declaration says %q declared version 1 and the log says %q — the two records of one fact disagree",
+			stored.DeclaredBy.Identity, actors[1])
 	}
 	t.Logf("stored declaration: %s", encoded)
 	t.Logf("change log says version 1 was declared by %q", actors[1])

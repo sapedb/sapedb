@@ -102,6 +102,25 @@ discovery.** For the rest of this document, "unreachable" means the second one.
 
 ### Does anything record who declared each version
 
+> **SUPERSEDED BY ISS-32: it does now.** `store.Operation` gained an optional `declaredBy` field
+> carrying a kind and an identity, assigned by the store from the `Caller` and never taken from
+> what a caller submitted. The measurement quoted immediately below was of the gap that field
+> closed, and the test it names no longer exists: it was rewritten in place as
+> `TestAStoredDeclarationSaysWhoDeclaredItAndTheLogAgrees`, which now asserts that the
+> declaration and the log name the **same** declarer rather than that only the log knows.
+>
+> The paragraph after it — that the actor is an account and never a vendor, and that there was
+> no vendor identity in this repository — was overtaken earlier, by SAPE-10 and SAPE-28. A
+> declaration installed from a signed bundle is now recorded against the ed25519 key that
+> signed it, as `{"kind":"key", ...}`; `internal/cli/bundle.go` is the one place that sets
+> `store.Caller.Signer`, and `TestInstallingAVerifiedBundleDeclaresWhatItCarries` reads the key
+> back out of a dump. The `grep` for `ed25519` below returned 0 on the day it was run; the same
+> command returns 72 today, 42 of them outside `_test.go`.
+>
+> **The next section still holds, and is why the field exists.** The log's memory has an expiry
+> and a dump carries no log at all, so the declaration is the only place an answer survives
+> either. The rest of this document is left as it was written.
+
 The stored declaration does not:
 
 ```

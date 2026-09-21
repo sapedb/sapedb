@@ -53,6 +53,11 @@ import (
 const NamespaceSeparator = ':'
 
 // What kind of thing holds a claim. Stored on the claim, not inferred.
+//
+// The same two kinds also say what a Declarer is (declarer.go), which records
+// who declared one version of an operation. One vocabulary rather than two,
+// because a key and an actor are the same two kinds of identity in both places
+// and a second set of words for them is a second set to keep in agreement.
 const (
 	// ClaimedByKey is an ed25519 public key that signed a bundle, in hex.
 	// This is the strong one: it was checked, over exactly the declarations

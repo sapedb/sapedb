@@ -827,9 +827,26 @@ func apply(db *store.Store, files []string, out io.Writer, by store.Caller) erro
 }
 
 // sameOperation compares a declaration with one already stored, ignoring the
-// version the stored one was given.
+// fields the STORE assigns rather than the declarer writing them: the version
+// it was given, and the identity it was recorded against.
+//
+// DeclaredBy is here for exactly the reason Version is. Neither is ever
+// present in a schema file or a bundle — DeclareOperation overwrites both from
+// its own knowledge — so leaving either in the comparison makes every stored
+// declaration differ from every file that produced it, and `apply` run twice
+// writes a second version of everything. That is not a hypothetical: adding
+// the field without this line turned TestApplyingTwiceChangesNothing and
+// TestInstallingAVerifiedBundleDeclaresWhatItCarries red on the first run.
+//
+// So an identical declaration re-applied by somebody ELSE keeps the identity
+// already on it. That is the honest answer rather than a gap: nothing was
+// declared, and the record says who declared, not who last ran a command that
+// declined to. Recording the second identity would mean writing a new version
+// that differs from the old one in nothing but its attribution, which is the
+// noise these skips exist to prevent.
 func sameOperation(stored, wanted store.Operation) bool {
 	wanted.Version = stored.Version
+	wanted.DeclaredBy = stored.DeclaredBy
 
 	first, err := json.Marshal(stored)
 	if err != nil {

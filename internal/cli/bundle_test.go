@@ -143,6 +143,30 @@ func TestInstallingAVerifiedBundleDeclaresWhatItCarries(t *testing.T) {
 		}
 	}
 
+	// The declarations are recorded against the KEY that signed the bundle,
+	// not against the account whose machine ran the command (ISS-32). This is
+	// the only path in the tree that sets store.Caller.Signer — see
+	// bundle.go's `store.Caller{Actor: ..., Signer: key}` — so it is the only
+	// place the "key beats actor" rule can be measured end to end. Read out
+	// of a dump, which is the declaration as stored rather than anything
+	// install chose to print.
+	dumped, errs, status := setup.run("dump")
+	if status != 0 {
+		t.Fatalf("dump after install: %s", errs)
+	}
+	// The known-positive: the dump is the database under test and does hold
+	// the operations, so an identity missing below is missing rather than
+	// being looked for in the wrong place.
+	if !strings.Contains(dumped, `"name":"postings.get"`) {
+		t.Fatalf("the dump does not hold postings.get at all, so nothing below is measured:\n%s", dumped)
+	}
+	if want := `"declaredBy":{"kind":"key","identity":"` + hex.EncodeToString(public) + `"}`; !strings.Contains(dumped, want) {
+		t.Errorf("an installed declaration is not recorded against the signing key (%s):\n%s", want, dumped)
+	}
+	if strings.Contains(dumped, `"kind":"actor"`) {
+		t.Errorf("an installed declaration is recorded against an actor — the checked identity lost to the named one:\n%s", dumped)
+	}
+
 	// Installed twice is installed once. A bundle is a release artifact and
 	// the obvious thing to do with one after a restore is install it again;
 	// handing every caller a new operation version for that would be a
