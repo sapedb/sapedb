@@ -231,6 +231,88 @@ func TestLookingAroundBeforeKnowingTheNames(t *testing.T) {
 			t.Errorf("ls did not mention %q:\n%s", wanted, printed)
 		}
 	}
+	// This Catalogue carries no Envelopes at all — a Looking that predates
+	// SAPE-8's field, or simply nothing supplied — and ls must still show the
+	// operation rather than panic reaching for an envelope that is not there.
+	if strings.Contains(printed, "limit") {
+		t.Errorf("ls printed a limit with no envelope to read one from:\n%s", printed)
+	}
+}
+
+// TestLsShowsTheEnvelopeBesideEachComposedOperation is SAPE-11's answer to
+// "what can this server run, without running anything": the catalogue
+// WhatIsHere already hands back (SAPE-8) is worth nothing at the shell if ls
+// never prints it, so this is the one place that pairing is checked all the
+// way from typing `ls` to the line on screen.
+//
+// The envelope here is built by hand rather than by running a real store
+// through compose.go — internal/store's own
+// TestEnvelopeOfAComposedOperationReadsTheCeilingWithoutWalkingItsStepsByHand
+// already measures that ceiling()/envelopeOf produce these exact numbers for
+// a composed operation; this test is only asking whether ls, given that
+// answer, shows it. Two different questions, so two different fixtures.
+func TestLsShowsTheEnvelopeBesideEachComposedOperation(t *testing.T) {
+	look := &looked{here: store.Catalogue{
+		Operations: []store.Operation{{
+			Name: "catalog.page", Collection: "", Action: store.ActionBatch, Version: 1,
+		}},
+		Envelopes: []store.Envelope{{
+			Operation: "catalog.page", Version: 1,
+			Collections:   []string{"items"},
+			Indexes:       []string{"by_shelf"},
+			Limit:         51,
+			WholeDocument: true,
+		}},
+	}}
+
+	printed := typed(t, look, `ls`)
+	for _, wanted := range []string{
+		"operation catalog.page v1 batch",
+		"limit 51, collections [items], indexes [by_shelf]",
+		"whole document escapes",
+	} {
+		if !strings.Contains(printed, wanted) {
+			t.Errorf("ls did not mention %q:\n%s", wanted, printed)
+		}
+	}
+}
+
+// TestLsShowsScopesAndANarrowProjection covers the other two facts an
+// envelope carries that TestLsShowsTheEnvelopeBesideEachComposedOperation
+// does not: a declared projection narrower than the whole document, and the
+// scopes a caller must hold to run this at all — copied from the underlying
+// store.TestEnvelopeOfAnOperationWithScopesReadsThemWithoutWalking fixture's
+// shape, again as a hand-built fixture rather than a real store, because
+// what is under test is the printing, not the derivation.
+func TestLsShowsScopesAndANarrowProjection(t *testing.T) {
+	look := &looked{here: store.Catalogue{
+		Operations: []store.Operation{{
+			Name: "accounts.get", Collection: "accounts", Action: store.ActionGet, Version: 1,
+		}},
+		Envelopes: []store.Envelope{{
+			Operation: "accounts.get", Version: 1,
+			Collections: []string{"accounts"},
+			Indexes:     []string{},
+			Limit:       1,
+			Projection:  []string{"name"},
+			Scopes:      []string{"accounts:read", "admin"},
+		}},
+	}}
+
+	printed := typed(t, look, `ls`)
+	for _, wanted := range []string{
+		"operation accounts.get v1 get accounts",
+		"limit 1, collections [accounts], indexes []",
+		"projection [name] escapes",
+		"scopes accounts:read, admin",
+	} {
+		if !strings.Contains(printed, wanted) {
+			t.Errorf("ls did not mention %q:\n%s", wanted, printed)
+		}
+	}
+	if strings.Contains(printed, "whole document") {
+		t.Error("ls said the whole document escapes, but this envelope declares a narrower projection")
+	}
 }
 
 // TestAShellThatCannotReachItsServerSaysSo covers the one thing the loop does
