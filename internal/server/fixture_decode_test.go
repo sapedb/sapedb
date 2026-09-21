@@ -69,6 +69,16 @@ func TestEveryRequestFixtureDecodesIntoTheStructThatServesIt(t *testing.T) {
 			}
 			return nil
 		},
+		// SAPE-13: subscribe was missing from this table -- not excluded on
+		// purpose like hello below, just never added, which is exactly the
+		// kind of gap this table exists to make loud instead of silent.
+		// Nothing here checks From for emptiness: 0 is its valid zero value
+		// ("from the beginning of the log"), not a sign the field was
+		// misnamed -- see fixtures/frames.json's requestBodies note.
+		protocol.Subscribe: func(d *json.Decoder) error {
+			asked := subscribe{}
+			return d.Decode(&asked)
+		},
 	}
 
 	raw, err := os.ReadFile("../../fixtures/frames.json")

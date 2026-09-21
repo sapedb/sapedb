@@ -19,6 +19,76 @@
     "declare": 13,
     "establish": 14
   },
+  "requestBodies": {
+    "note": "SAPE-13: the top-level JSON fields of the Go struct each request frame's payload decodes into (internal/server: hello, call, elevating, exploring, declaring, establishing, subscribe -- welcome/result/failure/pong/event/goodbye travel the other way and are not covered here). A field of type \"object\" whose shape is not spelled out under it is a nested type this artifact deliberately leaves opaque -- store.Operation, store.Spec and store.Access are already a versioned surface of their own (see COMPATIBILITY.md's 'Declaration semantics'), and duplicating their shape here would be a second copy of a promise the store already makes and tests. 'required' means the Go field carries no `omitempty` tag, so the struct always considers the key part of the shape -- it does NOT always mean an empty or misnamed field is refused: see `zeroValueIsMeaningful` on the fields where it is not (hello.mode defaults to \"bound\", hello.dbname is meaningless in account mode). `unknownFieldPolicy` is measured, not assumed: every decode in internal/server uses plain json.Unmarshal, none of them call DisallowUnknownFields, so an extra or misspelled field is silently dropped rather than refused -- a client cannot rely on the server to catch a typo in a field name it invented; only a name the artifact does not list is a bug. See internal/server/fixture_body_test.go, which checks this table against the structs by reflection, and internal/server/fixture_body_live_test.go's TestARequestBuiltFromTheArtifactIsWhatARealServerAccepts, which sends bodies built from exactly these field names to a real server and mutates one field name at a time.",
+    "unknownFieldPolicy": "ignore",
+    "frames": {
+      "hello": {
+        "fields": {
+          "account": { "type": "string", "required": true },
+          "password": { "type": "string", "required": true },
+          "dbname": { "type": "string", "required": true, "zeroValueIsMeaningful": "an account-mode handshake names no database at all -- every call brings its own" },
+          "sig": { "type": "string", "required": true },
+          "mode": { "type": "string", "required": true, "zeroValueIsMeaningful": "an empty mode is treated as \"bound\", not refused" }
+        }
+      },
+      "invoke": {
+        "fields": {
+          "command": { "type": "string", "required": true },
+          "version": { "type": "integer", "required": false },
+          "args": { "type": "object", "required": false },
+          "writeId": { "type": "string", "required": false },
+          "dbname": { "type": "string", "required": false },
+          "sig": { "type": "string", "required": false },
+          "grant": { "type": "object", "required": false, "shape": "grant" }
+        }
+      },
+      "elevate": {
+        "fields": {
+          "proof": { "type": "string", "required": true }
+        }
+      },
+      "explore": {
+        "fields": {
+          "access": { "type": "object", "required": true, "opaque": "internal/store.Access" },
+          "catalogue": { "type": "boolean", "required": false },
+          "dbname": { "type": "string", "required": false },
+          "sig": { "type": "string", "required": false }
+        }
+      },
+      "declare": {
+        "fields": {
+          "operation": { "type": "object", "required": true, "opaque": "internal/store.Operation" },
+          "dbname": { "type": "string", "required": false },
+          "sig": { "type": "string", "required": false }
+        }
+      },
+      "establish": {
+        "fields": {
+          "spec": { "type": "object", "required": true, "opaque": "internal/store.Spec" },
+          "dbname": { "type": "string", "required": false },
+          "sig": { "type": "string", "required": false }
+        }
+      },
+      "subscribe": {
+        "fields": {
+          "from": { "type": "integer", "required": true },
+          "dbname": { "type": "string", "required": false },
+          "sig": { "type": "string", "required": false }
+        }
+      }
+    },
+    "shapes": {
+      "grant": {
+        "fields": {
+          "scopes": { "type": "array", "required": false },
+          "exp": { "type": "integer", "required": true },
+          "serial": { "type": "string", "required": true },
+          "sig": { "type": "string", "required": false }
+        }
+      }
+    }
+  },
   "cases": [
     {
       "name": "ping, no payload",
@@ -155,6 +225,16 @@
       },
       "payloadHex": "7b2273706563223a7b226e616d65223a226e6f746573222c226b6579223a7b2270617468223a226964222c2274797065223a22737472696e67222c226175746f223a22756c6964227d2c22696e6465786573223a5b7b226e616d65223a2262795f6d616465222c226669656c6473223a5b7b2270617468223a226d616465222c2274797065223a226e756d626572222c226d697373696e67223a226c617374227d5d7d5d7d7d",
       "frameHex": "010e00000009000000a67b2273706563223a7b226e616d65223a226e6f746573222c226b6579223a7b2270617468223a226964222c2274797065223a22737472696e67222c226175746f223a22756c6964227d2c22696e6465786573223a5b7b226e616d65223a2262795f6d616465222c226669656c6473223a5b7b2270617468223a226d616465222c2274797065223a226e756d626572222c226d697373696e67223a226c617374227d5d7d5d7d7d"
+    },
+    {
+      "name": "subscribe: resuming a change stream partway through the log",
+      "type": 8,
+      "id": 3,
+      "json": {
+        "from": 12345
+      },
+      "payloadHex": "7b2266726f6d223a31323334357d",
+      "frameHex": "0108000000030000000e7b2266726f6d223a31323334357d"
     }
   ]
 }
