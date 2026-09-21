@@ -1,5 +1,20 @@
 # Replacement prose for `learn/external-operations.html` (SAPE-12, criterion 6)
 
+> **This copy has been applied, and the published page has since moved past it.**
+> `learn/external-operations.html` on the site is the artefact the criterion is about; this
+> file is the patch that was written to produce it, kept because `.github/scripts/worked-example.sh`
+> and `docs_worked_example_test.go` are written against it. Read the two apart:
+>
+> - The **worked example** job proves the sequence in *this file* runs from cold on a machine
+>   that is not the author's. It proves nothing at all about the published page, which lives in
+>   a different repository that this repository's CI cannot see.
+> - Where the two have parted company — the invoke session, the type generator's path, the
+>   bundle that fails to install — the published page is the corrected side and this file is the
+>   older one. A green `worked example` job is therefore not a statement that the site is right.
+>
+> Closing that gap needs a check that can read the site. Until there is one, the page is
+> verified by hand, and a change to either side should be made on both.
+
 This file is copy for somebody else to apply. Nothing under `projects/sapedb-site/` was
 edited while writing it — that directory was being uploaded by another agent, and an edit
 mid-flight would have published half a page.
