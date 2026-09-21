@@ -1266,6 +1266,25 @@ func codeFor(err error) string {
 		{store.ErrDamaged, "damaged"},
 		{store.ErrIncompatible, "incompatible"},
 
+		// SAPE-34. Two codes rather than one, because they tell their reader
+		// to do two opposite things.
+		//
+		// "digest" is a row in the range that could not go into the hash —
+		// the field is missing, is not text, or does not decode. The data is
+		// wrong, or the declaration names the wrong field, and the message
+		// carries the key to go and look at. Retrying changes nothing.
+		//
+		// "ceiling" is the walk hitting the row limit the operation declares.
+		// Nothing is wrong with the data at all: the answer would have been
+		// correct and is being withheld, because a digest of a prefix is
+		// indistinguishable from a digest of the whole range. What that
+		// reader has to do is redeclare with a bigger limit, having decided
+		// the bigger walk is one they want to pay for — which is a different
+		// sentence from "your rows are broken", and neither of them is
+		// "argument".
+		{store.ErrDigest, "digest"},
+		{store.ErrCeiling, "ceiling"},
+
 		// The bundle refusals (SAPE-10). Nothing in this server hands a
 		// bundle to anything yet — verification is offline, in front of a
 		// server rather than inside one — so none of these six is reachable

@@ -39,11 +39,11 @@ func suggest(line string, here store.Catalogue) []string {
 // candidates is everything that could stand in this position.
 func candidates(before []string, here store.Catalogue) []string {
 	if len(before) == 0 {
-		return []string{"count", "declare", "exit", "get", "help", "invoke", "ls", "scan"}
+		return []string{"count", "declare", "exit", "get", "hash", "help", "invoke", "ls", "scan"}
 	}
 
 	switch before[0] {
-	case "get", "scan", "count":
+	case "get", "scan", "count", "hash":
 	case "invoke":
 		// The names the database holds, then the arguments the named
 		// declaration holds. This is the completion this shell is best at and
@@ -73,6 +73,15 @@ func candidates(before []string, here store.Catalogue) []string {
 		return nil
 	}
 
+	// A hash is a different little grammar and not a scan with two extra
+	// words: it walks key order, so there is no index to offer straight after
+	// the collection, and it hands back a digest, so there is no `fields`
+	// either. Offering a scan's words here would offer things the parser then
+	// refuses, which this file's own doc says is worse than offering nothing.
+	if before[0] == "hash" {
+		return hashing(collection, before[2:])
+	}
+
 	rest := before[2:]
 
 	// The index goes straight after the collection, and only there.
@@ -95,6 +104,35 @@ func candidates(before []string, here store.Catalogue) []string {
 	}
 
 	return []string{"after", "before", "fields", "from", "limit", "to"}
+}
+
+// hashing is what could come next in a `hash` line, after the collection.
+//
+// `field` and `decode` each take exactly one word, so unlike `fields` they
+// are finished as soon as one has been typed — which is why this counts what
+// follows the keyword instead of asking only which keyword came last.
+func hashing(collection store.Spec, rest []string) []string {
+	words := []string{"after", "before", "decode", "field", "from", "limit", "to"}
+
+	switch {
+	case waiting(rest, "field"):
+		// The fields this collection is known to have: its key, and
+		// everything its indexes are over. A document may hold more —
+		// nothing here declares the shape of one — so these are offered,
+		// not enforced.
+		return append(fields(collection), words...)
+	case waiting(rest, "decode"):
+		// The only encoding there is. A second one is a second thing to
+		// keep forever, and nobody has asked for one.
+		return append([]string{store.DecodeBase64}, words...)
+	}
+	return words
+}
+
+// waiting says whether the line ends with this keyword still expecting its
+// one value.
+func waiting(words []string, word string) bool {
+	return len(words) > 0 && words[len(words)-1] == word
 }
 
 // invokable is what could come next in an `invoke` line: the declared names

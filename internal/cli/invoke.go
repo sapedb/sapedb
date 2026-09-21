@@ -299,14 +299,15 @@ func takes(operation store.Operation) string {
 
 // showInvoked prints what an operation answered.
 //
-// A read goes through showResult, the same function `get`, `scan` and `count`
-// print through, so there is one table style in this shell rather than two
-// that agree until somebody changes one of them. A write has nothing showResult
+// A read goes through showResult, the same function `get`, `scan`, `count`
+// and `hash` print through, so there is one table style in this shell rather
+// than two that agree until somebody changes one of them. A write has nothing showResult
 // can say — it returns no rows, and printing "nothing" for an insert that
 // worked would read as though it had not — so those two lines are here.
 func showInvoked(operation store.Operation, result store.Result, out io.Writer) {
 	switch operation.Action {
-	case store.ActionGet, store.ActionScan, store.ActionCount, store.ActionTotals:
+	case store.ActionGet, store.ActionScan, store.ActionCount, store.ActionTotals,
+		store.ActionHashRange:
 		showResult(operation.Action, result, out)
 		return
 	}

@@ -143,6 +143,20 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 			return err
 		}
 
+	case ActionHashRange:
+		// The same bounds() every other range read goes through, so a
+		// hashRange's stretch is worked out by the one calculation rather
+		// than by a second one written beside it — including the refusal of
+		// a From that sorts after To, which a digest wants for exactly the
+		// reason a scan does.
+		within, err := bounds(operation, values)
+		if err != nil {
+			return err
+		}
+		if err := s.hashRange(collection, operation, within, result); err != nil {
+			return err
+		}
+
 	case ActionInsert, ActionPut:
 		document, err := build(operation.Document, values)
 		if err != nil {

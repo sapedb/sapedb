@@ -45,6 +45,36 @@ const (
 	ActionUpdate = "update" // named fields of an existing document
 	ActionDelete = "delete" // one document by its primary key
 	ActionBatch  = "batch"  // several of the above, as one transaction
+
+	// ActionHashRange is the tenth, and the first thing in this store that
+	// WALKS a range at run time to produce something other than the rows it
+	// walked: the values of a stretch of keys, in key order, joined with
+	// nothing between them, answered as the SHA-256 of the join.
+	//
+	// Its output is thirty-two bytes whatever the input was, which is the
+	// whole reason it can exist before a size ceiling does. What it costs is
+	// therefore invisible in what it answers, and that is why its declared
+	// limit is counted while it walks rather than taken on trust: see
+	// hashRange in digest.go.
+	ActionHashRange = "hashRange"
+)
+
+// How a value is read before it reaches the digest, as an operation writes it
+// down. A declared enumeration, in the same family as an index field's
+// Missing — a choice written into the declaration, never an expression a
+// caller composes.
+//
+// It exists because binary is stored as base64 text today: a string cannot
+// carry arbitrary bytes, and the byte 0xFF put through one comes back as
+// U+FFFD. Hashing the values as stored would answer the SHA-256 of a base64
+// transcript, which can never equal the hash a client computed from the
+// original file — two correct systems disagreeing forever, and the
+// disagreement looking exactly like corruption. A real bytes type will make
+// this unnecessary for new data and it stays useful for the data that is
+// already base64.
+const (
+	DecodeNone   = ""       // the value as stored, hashed as its UTF-8 bytes
+	DecodeBase64 = "base64" // standard base64 text, decoded before it is hashed
 )
 
 // ClusteredIndex is the name for walking documents in primary-key order, which
@@ -65,6 +95,24 @@ var (
 	ErrMissing     = errors.New("sapedb/store: the document this step needs is not there")
 	ErrCondition   = errors.New("sapedb/store: the document is not in the state this operation requires")
 	ErrUncommitted = errors.New("sapedb/store: a batch needs a database with nothing half-written in it")
+
+	// ErrDigest is a document in the range that cannot go into the digest —
+	// the field is missing, it is not text, or it does not read as what the
+	// declaration says it is encoded in.
+	//
+	// It refuses rather than skips, and the precedent is the rollup: a total
+	// that silently skips what it could not add is a total nobody can trust.
+	// A digest with a hole in it is worse, because it is thirty-two bytes
+	// that look exactly as authoritative as a correct thirty-two bytes.
+	ErrDigest = errors.New("sapedb/store: a document in this range cannot go into the digest")
+
+	// ErrCeiling is a walk that reached the row limit its operation declares.
+	//
+	// Separate from every other refusal here because it is the one that says
+	// the answer would have been RIGHT and is not being given: at the ceiling
+	// a hashRange stops and refuses rather than hand back the digest of a
+	// prefix, which is indistinguishable from the digest of the whole range.
+	ErrCeiling = errors.New("sapedb/store: the walk reached the row limit this operation declares")
 )
 
 // Operation is a declaration: everything about a call except its arguments.
@@ -153,6 +201,18 @@ type Operation struct {
 
 	// Steps are what a batch does, in order and in one transaction.
 	Steps []Step `json:"steps,omitempty"`
+
+	// Field is which field of each document a hashRange digests, as a path
+	// the same shape a projection uses. Read by nothing else: an action that
+	// writes one down and is not a hashRange is refused, because a word
+	// nothing reads is how a caller ends up believing a promise nobody made.
+	Field string `json:"field,omitempty"`
+
+	// Decode is how the value at Field is read before it reaches the digest:
+	// DecodeBase64, or absent for the bytes of the string as stored. Also
+	// read only by a hashRange, and refused elsewhere for the same reason as
+	// Field.
+	Decode string `json:"decode,omitempty"`
 
 	// Projection is the fields a read returns. Empty returns the document.
 	Projection []string `json:"projection,omitempty"`
@@ -369,6 +429,21 @@ type Result struct {
 	// was a retry of a write that had already landed. Nothing was written
 	// again.
 	Repeated uint64 `json:"repeated,omitempty"`
+
+	// Digest is what a hashRange answered: the SHA-256 of the values it
+	// walked, joined with nothing between them, written as lower-case hex.
+	//
+	// Hex rather than base64 so that it can be compared by eye, and by
+	// paste, with what `sha256sum` and every client's own SHA-256 prints —
+	// which is the entire point of the action. Count rides alongside it and
+	// says how many rows were read to get there: the digest is thirty-two
+	// bytes however far the walk went, so the cost is not readable from the
+	// answer unless something says it.
+	//
+	// Never partial. A hashRange that reached its declared ceiling returns an
+	// error and no Digest at all, because a digest of part of a range is
+	// indistinguishable from a digest of all of it.
+	Digest string `json:"digest,omitempty"`
 }
 
 // DeclareOperation stores an operation, as a new version if the name is
@@ -737,7 +812,22 @@ func (s *Store) validateOperation(operation *Operation) error {
 			return err
 		}
 
-	case ActionScan, ActionCount:
+	case ActionScan, ActionCount, ActionHashRange:
+		// Key order, and only key order, for a hashRange. The answer is the
+		// SHA-256 of the values joined with nothing between them, so the
+		// order they are joined in IS the answer — and an index is a second
+		// order over the same rows, chosen per declaration. Two of the
+		// store's own index shapes make it worse than merely different: an
+		// array index spreads one document into several entries, so the same
+		// value would be fed to the digest more than once, and an index over
+		// a field several documents share gives no order at all within a tie.
+		// "The hash of this stretch of keys" is a sentence with one answer;
+		// "the hash of this stretch of some index" is not.
+		if operation.Action == ActionHashRange &&
+			operation.Index != "" && operation.Index != ClusteredIndex {
+			return fmt.Errorf("%w: a hashRange walks %q in key order, and %q is an index — an index is a second order over the same rows, and an array index visits one document more than once, so the digest would depend on which order was picked rather than on the bytes",
+				ErrDeclaration, operation.Collection, operation.Index)
+		}
 		fields, err := scanFields(collection, operation.Index)
 		if err != nil {
 			return err
@@ -787,9 +877,20 @@ func (s *Store) validateOperation(operation *Operation) error {
 		// operations landed. It is kept rather than folded into this one,
 		// because it reads declarations already on disk — including ones
 		// written before this line existed.
+		//
+		// All three of them, now. A hashRange is the one where the limit does
+		// the most work and the least of it is visible: a scan's cost is
+		// roughly the rows it hands you and a count's answer at least grows
+		// with the walk, while a hashRange answers thirty-two bytes whether
+		// it read four rows or forty million. Nothing about what comes back
+		// says what it cost, so the declaration is the only place it can be
+		// said.
 		if operation.Limit <= 0 {
 			if operation.Action == ActionCount {
 				return fmt.Errorf("%w: a count must declare how far it walks — it hands back a number rather than rows, so the walk is the whole of what it costs", ErrDeclaration)
+			}
+			if operation.Action == ActionHashRange {
+				return fmt.Errorf("%w: a hashRange must declare how far it walks — it hands back thirty-two bytes whatever it read, so the walk is the whole of what it costs and the answer never reveals it", ErrDeclaration)
 			}
 			return fmt.Errorf("%w: a scan must declare how many rows it may return", ErrDeclaration)
 		}
@@ -801,6 +902,26 @@ func (s *Store) validateOperation(operation *Operation) error {
 		// above now covers every limit that is not positive, for both actions,
 		// so that branch had become unreachable — and an unreachable refusal
 		// is a rule a reader believes is doing work.
+
+		if operation.Action == ActionHashRange {
+			if operation.Field == "" {
+				return fmt.Errorf("%w: a hashRange must say which field of each document it digests", ErrDeclaration)
+			}
+			switch operation.Decode {
+			case DecodeNone, DecodeBase64:
+			default:
+				return fmt.Errorf("%w: a hashRange decodes %q or nothing, not %q — it is a word written into the declaration, and this store has no other encoding to offer",
+					ErrDeclaration, DecodeBase64, operation.Decode)
+			}
+			// A projection is fields a read hands back, and a hashRange hands
+			// back a digest. Refused rather than ignored: a totals ignores one
+			// and that is a wart this action does not have to inherit, because
+			// nothing has declared a hashRange yet and so nothing is being
+			// tightened on anybody.
+			if len(operation.Projection) > 0 {
+				return fmt.Errorf("%w: a hashRange hands back a digest rather than rows, so a projection on one names fields nobody will ever be shown", ErrDeclaration)
+			}
+		}
 
 	case ActionBatch:
 		if len(operation.Steps) == 0 {
@@ -885,10 +1006,32 @@ func (s *Store) validateOperation(operation *Operation) error {
 	// totals is refused, so it gets the same answer.
 	if operation.Direction != nil && operation.Action != ActionScan {
 		why := "does not walk an index, so it has no direction"
-		if operation.Action == ActionCount {
+		switch operation.Action {
+		case ActionCount:
 			why = "hands back a number, and that number is the same from either end"
+		case ActionHashRange:
+			// Not the same reason as a count's, and the difference is the
+			// whole point of the action: reversing a hashRange would change
+			// the answer, because the order the values are joined in IS the
+			// answer. A direction here would be a caller deciding which of
+			// two digests of the same bytes they wanted, which is exactly
+			// what "how a file was split does not change its hash" is for.
+			why = "joins its values in key order, and reading them back to front is a different digest of the same bytes"
 		}
 		return fmt.Errorf("%w: a %s %s", ErrDeclaration, operation.Action, why)
+	}
+
+	// Field and Decode are read by a hashRange and by nothing else, so an
+	// action that writes one down has written a word this store will not
+	// read. The same rule as the direction above, for the same reason: a
+	// declaration whose words are quietly ignored is a promise nobody made.
+	if operation.Action != ActionHashRange {
+		if operation.Field != "" {
+			return fmt.Errorf("%w: a %s does not digest a field, so %q names something nothing here reads", ErrDeclaration, operation.Action, operation.Field)
+		}
+		if operation.Decode != "" {
+			return fmt.Errorf("%w: a %s decodes nothing, so %q names something nothing here reads", ErrDeclaration, operation.Action, operation.Decode)
+		}
 	}
 
 	for _, path := range operation.Projection {

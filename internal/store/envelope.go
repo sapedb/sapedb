@@ -39,18 +39,20 @@ import (
 //     always the resolved ceiling, so "absent" cannot mean anything because
 //     Limit is never absent.
 //
-//     A count is the one action where Limit is deliberately NOT ceiling():
-//     ceiling() reports 1 for a count, because that is what a count
-//     contributes to an ENCLOSING batch's declared sum (N5) — a single
-//     answer, not a row. A count can never actually be composed that way
-//     (validateComposedStep refuses one as a callee outright), so that "1"
-//     never describes a real run; the real cost of running a count by
-//     itself is how far it walks, which is Operation.Limit, required
-//     positive by validateOperation for exactly this reason. Reusing
-//     ceiling() here would print "1" for a count that may examine a
-//     million documents, which is the misleading number, not the honest
-//     one — so Limit is Operation.Limit for a count and ceiling() for
-//     everything else.
+//     A count and a hashRange are the two actions where Limit is
+//     deliberately NOT ceiling(): ceiling() reports 1 for each of them,
+//     because that is what each contributes to an ENCLOSING batch's
+//     declared sum (N5) — a single answer, not a row. Neither can
+//     actually be composed that way (validateComposedStep refuses both as
+//     a callee outright), so that "1" never describes a real run; the real
+//     cost of running either by itself is how far it walks, which is
+//     Operation.Limit, required positive by validateOperation for exactly
+//     this reason. Reusing ceiling() here would print "1" for a count that
+//     may examine a million documents, which is the misleading number, not
+//     the honest one — and for a hashRange it would be worse still, since a
+//     hashRange's answer is thirty-two bytes at every size, so this Limit
+//     is the only place its cost is written at all. Limit is
+//     Operation.Limit for those two and ceiling() for everything else.
 //
 //   - Projection / WholeDocument together say which fields escape. Exactly
 //     one of two shapes: WholeDocument true (a flat get or scan with no
@@ -60,8 +62,9 @@ import (
 //     the whole document regardless of what the enclosing operation
 //     declares), or Projection holding the narrower field list a read
 //     declared. Neither is set for an action that returns no document
-//     fields at all: a count (a number, not rows), a write (no rows), or a
-//     totals (see below).
+//     fields at all: a count (a number, not rows), a hashRange (thirty-two
+//     bytes derived from the values, which no document can be read back out
+//     of), a write (no rows), or a totals (see below).
 //
 // Scopes rides along for free: validateComposedStep already requires a
 // composed operation's own Scopes to be the union of whatever anything it
@@ -129,7 +132,7 @@ func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
 	// for the two to quietly disagree. Except for a top-level count, whose
 	// real cost ceiling() does not describe — see the Envelope doc above.
 	limit := operation.Limit
-	if operation.Action != ActionCount {
+	if operation.Action != ActionCount && operation.Action != ActionHashRange {
 		var err error
 		limit, err = s.ceiling(operation, newCosts())
 		if err != nil {
@@ -213,6 +216,15 @@ func (s *Store) envelopeOf(operation Operation) (Envelope, error) {
 		case ActionCount:
 			indexes[indexName(op.Index)] = true
 			// Hands back a number, not a document: nothing escapes.
+
+		case ActionHashRange:
+			// Always the clustered index — validateOperation refuses any
+			// other — and thirty-two bytes derived from the values rather
+			// than the values themselves, so nothing escapes in the sense
+			// this field means: a caller cannot read a document back out of
+			// a digest. What the Limit above says about it is the honest
+			// number, which is how far it may walk.
+			indexes[indexName(op.Index)] = true
 
 		case ActionTotals:
 			// A synthetic {count, group} row, not the document — see the

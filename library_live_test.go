@@ -4,7 +4,7 @@ package sapedb
 //
 // examples/library/module.json is a whole small business module rather than
 // one missing verb: three collections with their own keys, four indexes, one
-// rollup, and nine operations across five of the nine actions. It exists to be
+// rollup, and nine operations across five of the ten actions. It exists to be
 // read by somebody outside this project who wants to write a second one, and
 // these tests exist so that it cannot rot while nobody is looking.
 //

@@ -73,7 +73,7 @@ to your database. That is the whole of it.</p>
 
 <p>What it is <em>not</em> is code. There is no plugin, no hook, no trigger, no validator, no
 expression language and no WASM. A bundle can only say the things a declaration can say, and
-the nine actions in the store are the entire vocabulary &mdash; a bundle that wants a tenth
+the ten actions in the store are the entire vocabulary &mdash; a bundle that wants an eleventh
 cannot have one. This is why signing is enough where sandboxing would otherwise be needed: a
 verified bundle can widen what your database <em>holds</em>, never what your server is
 <em>able to do</em>. The worst a trusted-but-hostile bundle achieves is declarations that cost
@@ -89,7 +89,7 @@ every server whose operator trusts its author.</p>
 
 <p>A worked example ships in the repository at <code>examples/library/module.json</code>: a
 lending library, in three collections with five indexes and one rollup, and nine operations
-across five of the nine actions. It is deliberately a whole small module rather than one
+across five of the ten actions. It is deliberately a whole small module rather than one
 missing verb, because a module is the hard case &mdash; it has to bring its own storage.</p>
 
 <p>Operations in it are named <code>library:books.get</code>, not <code>books.get</code>. The

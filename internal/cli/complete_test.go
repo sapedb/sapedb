@@ -46,9 +46,10 @@ func TestWhatTheShellOffersIsWhatWillWork(t *testing.T) {
 		wanted []string
 	}{
 		// Nothing typed: the commands.
-		{``, []string{"count", "declare", "exit", "get", "help", "invoke", "ls", "scan"}},
+		{``, []string{"count", "declare", "exit", "get", "hash", "help", "invoke", "ls", "scan"}},
 		{`s`, []string{"scan"}},
 		{`c`, []string{"count"}},
+		{`h`, []string{"hash", "help"}},
 
 		// A collection, and only the ones that are here.
 		{`scan `, []string{"books", "borrowers"}},
@@ -141,7 +142,7 @@ func TestOneTabMovesAsFarAsEverybodyAgrees(t *testing.T) {
 // names would be worse than silence.
 func TestAnEmptyCatalogueOffersTheCommandsAndNothingElse(t *testing.T) {
 	empty := store.Catalogue{}
-	if got := suggest("", empty); len(got) != 8 {
+	if got := suggest("", empty); len(got) != 9 {
 		t.Errorf("with no catalogue, the commands are %v", got)
 	}
 	if got := suggest("scan ", empty); len(got) != 0 {

@@ -25,8 +25,12 @@ import (
 // by anyone who reaches the port, and the industry's own answer to having
 // built one is a configuration flag that turns it off in production.
 //
-// So: a document by its key, a stretch of a declared index, a count of one,
-// and a list of what is here. Values are written as JSON, because that is the
+// So: a document by its key, a stretch of a declared index, a count of one, a
+// SHA-256 of one, and a list of what is here. The digest is here because an
+// operator checking whether a stored file is still intact is exactly the
+// person standing at a prompt, and the alternative — copying ten megabytes of
+// rows out to somewhere that can hash them — is the thing splitting the file
+// up was for. Values are written as JSON, because that is the
 // one notation where "12" and 12 are visibly different things, which matters
 // when a key might be either.
 //
@@ -39,6 +43,7 @@ const shellHelp = `  ls                                 what this database holds
   get <collection> <key>             one document by its key
   scan <collection> [index] [...]    a stretch of an index
   count <collection> [index] [...]   how many are in that stretch
+  hash <collection> field <p> [...]  SHA-256 of that stretch, joined
   declare [name]                     the operation that would do the last thing
   help                               this
   exit                               leave
@@ -48,6 +53,12 @@ const shellHelp = `  ls                                 what this database holds
     to <value>...         where to stop    (before <value>... to exclude it)
     limit <n>             how many rows at most
     fields <a> <b>...     which fields to show
+
+  A hash takes the same bounds, in key order and with no index, plus:
+    field <path>          which field of each document goes into the digest
+    decode base64         read each value as base64 first
+    limit <n>             how many rows it may read — required, and it
+                          refuses at that number rather than hashing part
 
   Values are JSON: "a string", 42, true, null.
 
@@ -176,7 +187,7 @@ func one(look Looking, line string, drafted *store.Operation, out io.Writer) (bo
 		// nothing for `declare` to print that is not already stored.
 		return false, nil, invoking(look, words, out)
 
-	case "get", "scan", "count":
+	case "get", "scan", "count", "hash":
 		access, err := access(words)
 		if err != nil {
 			return false, nil, err
@@ -235,7 +246,7 @@ func access(words []string) (store.Access, error) {
 	// what the line was understood to be. A parser that reports the wrong word
 	// sends somebody looking at the wrong half of what they typed.
 	read := asked.Kind + " " + asked.Collection
-	if len(rest) > 0 && !keyword(rest[0]) {
+	if asked.Kind != "hash" && len(rest) > 0 && !keyword(rest[0]) {
 		asked.Index = rest[0]
 		rest = rest[1:]
 		read += ", index " + quoted(asked.Index)
@@ -286,6 +297,20 @@ func access(words []string) (store.Access, error) {
 				return store.Access{}, fmt.Errorf("fields what? name at least one")
 			}
 
+		case "field":
+			if len(rest) == 0 || keyword(rest[0]) {
+				return store.Access{}, fmt.Errorf("field what? name the one field that goes into the digest")
+			}
+			asked.Field = rest[0]
+			rest = rest[1:]
+
+		case "decode":
+			if len(rest) == 0 || keyword(rest[0]) {
+				return store.Access{}, fmt.Errorf("decode what? the only encoding this store reads is base64")
+			}
+			asked.Decode = rest[0]
+			rest = rest[1:]
+
 		default:
 			return store.Access{}, fmt.Errorf("there is no %q in a %s — this was read as: %s; type help",
 				word, asked.Kind, read)
@@ -312,9 +337,22 @@ func until(words []string) ([]any, []string, error) {
 // quoted is a word as it should appear inside a message about itself.
 func quoted(word string) string { return "\"" + word + "\"" }
 
+// keyword is every word that ends a run of values, for every command, rather
+// than a set per command. One list because until() and the bare-word-is-an-
+// index rule both have to agree with the switch in access() about where one
+// clause stops, and three lists that have to agree are two chances to
+// disagree.
+//
+// "field" and "decode" joined it with the hash command, and that narrows the
+// other two commands by exactly as much: an index or a projected field
+// literally called "field" or "decode" can no longer be typed at this shell.
+// Said out loud rather than left to be discovered, and accepted because
+// "fields" was already reserved next door to one of them — but it is a
+// narrowing, and it is the shell's grammar and not a declaration, which is
+// the only reason it is allowed to happen at all.
 func keyword(word string) bool {
 	switch word {
-	case "from", "after", "to", "before", "limit", "fields":
+	case "from", "after", "to", "before", "limit", "fields", "field", "decode":
 		return true
 	}
 	return false
@@ -334,14 +372,28 @@ func literal(word string) (any, error) {
 }
 
 func showResult(action string, result store.Result, out io.Writer) {
-	if action == store.ActionCount {
+	switch action {
+	case store.ActionCount:
 		fmt.Fprintf(out, "  %d\n", result.Count)
-	}
-	if action != store.ActionCount && len(result.Rows) == 0 {
-		// Not "0". A count answers with a number and a scan answers with rows,
-		// and printing a number for an empty scan reads as though the question
-		// asked for one.
-		fmt.Fprintln(out, "  nothing")
+
+	case store.ActionHashRange:
+		// The digest first, on a line of its own, because it is what somebody
+		// is about to compare with what `sha256sum` printed and a line with
+		// nothing else on it is a line you can select.
+		fmt.Fprintf(out, "  %s\n", result.Digest)
+		// Then the cost, because the digest is thirty-two bytes whether it
+		// walked four rows or four million and nothing else here would ever
+		// say which. An operator who typed a limit of 5000 and reads "4 rows"
+		// has found the missing file, not a working one.
+		fmt.Fprintf(out, "  %d rows\n", result.Count)
+
+	default:
+		if len(result.Rows) == 0 {
+			// Not "0". A count answers with a number and a scan answers with
+			// rows, and printing a number for an empty scan reads as though
+			// the question asked for one.
+			fmt.Fprintln(out, "  nothing")
+		}
 	}
 	for _, row := range result.Rows {
 		encoded, err := json.Marshal(row)

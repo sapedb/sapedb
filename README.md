@@ -64,6 +64,17 @@ may require the document to already be in a particular state. That last part is
 optimistic locking, written down in the schema where somebody deciding whether
 to trust an operation can read it.
 
+**`hashRange`.** The tenth action, and the only one that walks a range at run
+time to answer something other than the rows it walked: the values of a stretch
+of keys, in key order, joined with nothing between them, answered as the SHA-256
+of the join. It is how an application that stored a ten-megabyte file as five
+thousand rows asks *did all of it arrive, and is it still what it was* without
+moving any of it — the answer is thirty-two bytes however far it walked. The
+declaration says which field, whether to `decode` it from base64 first, and how
+many rows it may read; at that number it refuses rather than hashing a prefix,
+because a digest of part of a range is indistinguishable from a digest of all of
+it. `hash` at the shell does the same thing at a prompt.
+
 **Composed operations.** A step of a batch may name an operation that is
 already declared instead of a collection, which is how a vocabulary gets built
 out of itself rather than by adding an action for every shape somebody wants:

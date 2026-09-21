@@ -115,6 +115,21 @@ func (s *Store) ceiling(operation Operation, within *costs) (int, error) {
 		}
 		return 1, nil
 
+	case ActionHashRange:
+		// The same shape as a count's, and here for the same reason: a
+		// hashRange is refused outright as a callee (validateComposedStep
+		// below), so this number never describes a real run, and it is
+		// written down anyway so the two answers cannot drift apart if that
+		// refusal is ever lifted. One, because what it would contribute to
+		// an enclosing batch's declared sum is a single answer rather than a
+		// row — and the limit is still required, because "how far it walks"
+		// is the only cost it has.
+		if operation.Limit <= 0 {
+			return 0, fmt.Errorf("%w: %q is a hashRange with no declared limit, so how far it walks is decided by the data rather than by the declaration",
+				ErrDeclaration, operation.Name)
+		}
+		return 1, nil
+
 	case ActionBatch:
 		at := fmt.Sprintf("%s@%d", operation.Name, operation.Version)
 		if total, done := within.known[at]; done {
@@ -247,6 +262,18 @@ func (s *Store) validateComposedStep(step *Step, where string, parent *Operation
 	// A totals reads the same kind of answer into a row, where it survives.
 	if callee.Action == ActionCount {
 		return stepOffer{}, fmt.Errorf("%w: %s calls %q, which is a count — a count hands back a number and a composed answer has nowhere to put it, so it would be paid for and dropped; read a totals instead",
+			ErrDeclaration, where, step.Operation)
+	}
+
+	// A hashRange is refused for the same first reason and a sharper version
+	// of it. A composed answer has one Digest field, so two hashRange steps
+	// would not merely drop an answer — the second would overwrite the first
+	// in place, and what came back would be a digest of a range the caller
+	// never asked about, in the field where they were expecting the one they
+	// did. A count at least loses its answer loudly enough that nobody reads
+	// the wrong one.
+	if callee.Action == ActionHashRange {
+		return stepOffer{}, fmt.Errorf("%w: %s calls %q, which is a hashRange — a composed answer holds one digest, so a second one would overwrite the first and the caller would be handed the wrong range's hash in the right field; call it on its own",
 			ErrDeclaration, where, step.Operation)
 	}
 

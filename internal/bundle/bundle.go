@@ -29,9 +29,9 @@
 // # What a bundle deliberately cannot express
 //
 //   - Code. There is no custom action, no expression language, no trigger, no
-//     validator, no hook, no plugin, no WASM. The nine actions in
-//     store.ops.go are the whole vocabulary, and a bundle that wants a tenth
-//     cannot have one. This is why v1 can get away with signing rather than
+//     validator, no hook, no plugin, no WASM. The ten actions in
+//     store.ops.go are the whole vocabulary, and a bundle that wants an
+//     eleventh cannot have one. This is why v1 can get away with signing rather than
 //     sandboxing: a verified bundle can widen what a database holds, but not
 //     what the server is able to do. The worst a trusted-but-hostile bundle
 //     achieves is declarations that cost more to serve than the operator

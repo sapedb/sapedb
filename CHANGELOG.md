@@ -64,6 +64,97 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **`hashRange`: the SHA-256 of a stretch of keys, without the stretch leaving
+  the server (SAPE-34).** The values of a key range, in key order, joined with
+  nothing between them, answered as thirty-two bytes. It is how an application
+  that stored a ten-megabyte file as five thousand two-kilobyte rows — the
+  workload `bench/` already drives — asks the one question it could not ask
+  without moving everything back: *did all of it arrive, and is it still what it
+  was?* The joined value never exists anywhere; the digest is fed a chunk at a
+  time and the chunk is dropped. Measured: hashing a 512 MiB range moved the
+  live heap by 3.6 MiB, the same 3.6 MiB a 32 MiB range moves, with the whole
+  process under a 32 MiB `GOMEMLIMIT` and a peak RSS of 17 MB.
+
+  **Nothing between the values, and key order only.** Both rules exist so that
+  how a file was split is not a fact about the file: a separator would make the
+  chunk boundaries part of the answer, and the same bytes re-chunked would hash
+  differently. So the same megabyte as 1 KB rows and as 4 KB rows hashes the
+  same, and that assertion is the one that would catch a delimiter creeping in.
+  An index is refused rather than allowed as a second order over the same rows —
+  an array index visits one document more than once, and a tie in an index is no
+  order at all, so "the hash of this stretch of some index" is a sentence with
+  more than one answer.
+
+  **`decode` is a declared word, `"base64"` or absent.** Binary is stored as
+  base64 text today because a `string` cannot carry arbitrary bytes — measured,
+  the byte `0xFF` comes back as `U+FFFD` — so hashing the values *as stored*
+  would answer the SHA-256 of a base64 transcript, which can never equal what a
+  client computed from the original file. Two correct systems would disagree
+  forever and the disagreement would look like corruption. It is an enumeration
+  on the declaration, in the same family as an index field's
+  `missing: skip | first | last`, and not an expression a caller composes. A
+  real bytes type will make it unnecessary for new data; it keeps working for
+  the data that is already base64.
+
+  **A row it cannot hash refuses, and names the key.** Missing field, not text,
+  or not base64 — all three stop the walk. The precedent is the rollup, which
+  refuses a document it cannot add rather than skipping it because a total that
+  silently skips is a total nobody can trust. A digest is worse: it is
+  thirty-two bytes that look exactly as authoritative with a row missing as
+  without.
+
+  **The ceiling is counted while it walks, and this is the part that had to be
+  this way.** Everything in this store before it is bounded *by construction*: a
+  declaration cannot express a loop, because a step pins `operation@version`,
+  version numbers only ever rise, and a pinned reference resolves only to a
+  version that already exists — so a cycle would need a version to exist before
+  it was declared. That is why `ceiling()` can total a declaration at declare
+  time and why nothing counts during a run. **That property does not survive a
+  thing that walks.** The gap is measured, in `pipelines/tasks/0071` as W7: an
+  external operation declaring `limit 50`, correctly sandboxed and correctly
+  signed, served **50,000,000 rows** in one call — one million host calls of
+  fifty each — because the host checked every call and never the total. A
+  signature proves whose binary it is; a sandbox proves it does not escape;
+  **neither proves what it costs.** So the limit here is a ceiling the host
+  counts against while walking, against one counter, **per run of the operation
+  and not per underlying call** — a range spread over two partition files is
+  still one run. What is counted is rows read. At the ceiling it **stops and
+  refuses**: never the digest of a prefix, which is indistinguishable from the
+  digest of the whole range and so is the most dangerous output this could
+  have. The answer is thirty-two bytes however far it walked, which is exactly
+  why the work needs a ceiling the size of the answer will never reveal, and
+  why the declaration is the only place that cost can be written down.
+
+  **All three layers.** The declared operation takes `from` and `to` from the
+  caller and carries `field`, `decode` and `limit` itself; `hash <collection>
+  field <path> [decode base64] [from …] [to …] limit <n>` does the same thing at
+  the operator shell and prints the digest with the number of rows under it. The
+  shell is the one place this does **not** borrow an existing habit: `scan` and
+  `count` have their limit quietly capped at `MostRows` when an operator does
+  not say, because a capped scan still answers — a page, and a flag saying there
+  was more. A capped hash does not answer, it refuses, so capping would refuse
+  every file this command exists to check. A typed `hash` is asked for its limit
+  instead.
+
+  **What a client has to learn.** A tenth action name, `"hashRange"`; two new
+  optional fields on a declaration, `field` and `decode`; one new field on a
+  result, `digest`, lower-case hex so it pastes against what `sha256sum` printed;
+  and two new refusal codes, `digest` and `ceiling`. They are two rather than one
+  because they tell their reader opposite things — `digest` means a row is wrong
+  and retrying changes nothing, `ceiling` means the answer would have been
+  correct and the walk was longer than the declaration paid for. Neither is in
+  `fixtures/frames.json`: that artifact carries frame numbers and request body
+  shapes and deliberately leaves `store.Operation`, `store.Spec` and
+  `store.Access` opaque, and it has never held a failure code table — so no
+  client's copy of it needs syncing for this.
+
+  **Not in this one:** hashing a single document or a whole collection, any
+  second digest algorithm, and storing the digest anywhere. This returns it;
+  writing it down is SAPE-33's shape. A `hashRange` also cannot be a step of a
+  batch, for a sharper version of the reason a `count` cannot: a composed answer
+  holds one `digest`, so a second one would overwrite the first in place and
+  hand the caller the wrong range's hash in the right field.
+
 - **There is now a benchmark, and it measures this store under a small VPS's
   limits rather than on a laptop with everything switched off.** There was no
   performance measurement in this repository at all before this — no

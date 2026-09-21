@@ -16,8 +16,8 @@ import (
 // off — makes the shell a second, more powerful interface than the one the
 // application uses, available to whoever reaches the port. Here an access
 // somebody types has exactly the shapes an operation may declare: a document
-// by its key, a stretch of a declared index, a count of one. The only
-// difference is when the parameters arrive.
+// by its key, a stretch of a declared index, a count of one, a digest of one.
+// The only difference is when the parameters arrive.
 //
 // That is not a restriction bolted on afterwards. Explore builds the Operation
 // the typed access would have to be declared as, runs it through
@@ -40,6 +40,19 @@ import (
 // TestAScanDeclaredOverTheWireMustSayHowManyRowsItMayReturn and
 // TestACountDeclaredOverTheWireMustSayHowFarItWalks — one per action, both
 // against the Declare frame, which does NOT cap and must not.
+//
+// A hash is the one kind of access the cap is NOT applied to, and it is not
+// an exception so much as the same reasoning reaching the opposite answer.
+// Capping works for a scan and a count because a capped one still answers:
+// a page of rows and a flag saying there was more. A hashRange that hits its
+// ceiling does not answer, it refuses — a digest of a prefix is
+// indistinguishable from a digest of the whole range, so there is no shorter
+// honest answer to hand back. Capping it at MostRows would therefore turn
+// "the operator did not say how far" into "this refuses at a thousand rows",
+// which for the ten-megabyte file in five thousand rows that the action
+// exists to check is every single time. So a typed hash asks for its limit
+// instead, and says why — which is the honest shell equivalent of the
+// declaration's own rule rather than a hole in it.
 //
 // Two things follow from it being the same engine:
 //
@@ -64,9 +77,18 @@ const MostRows = 1000
 // declared. Which is why there is no field here for anything an operation
 // cannot declare.
 type Access struct {
-	// Kind is "get", "scan" or "count". Nothing writes: a change to a
+	// Kind is "get", "scan", "count" or "hash". Nothing writes: a change to a
 	// production database should be something somebody wrote down, reviewed
 	// and can run again, which is a declared operation.
+	//
+	// This is the shell's word for the access, not the store's word for the
+	// action, and for the first three the two happen to be spelled the same.
+	// "hash" is where they part: the action is ActionHashRange, named for
+	// the range it walks so that hashing one document and hashing a whole
+	// collection — neither of which exists — would have names of their own
+	// to take. The shell keeps the short word because it is typed by
+	// somebody at two in the morning. asOperation is the one place the
+	// translation happens.
 	Kind string `json:"kind"`
 
 	Collection string `json:"collection"`
@@ -83,6 +105,13 @@ type Access struct {
 
 	// Projection is which fields to show.
 	Projection []string `json:"projection,omitempty"`
+
+	// Field and Decode are a hash: which field of each document goes into
+	// the digest, and how it is read before it gets there. Exactly the two
+	// words the declaration carries, arriving now instead of having been
+	// declared — which is the whole of what Access is.
+	Field  string `json:"field,omitempty"`
+	Decode string `json:"decode,omitempty"`
 }
 
 // Explore runs an access and hands back the operation it would be.
@@ -168,8 +197,25 @@ func (s *Store) asOperation(access Access) (Operation, error) {
 			operation.Limit = MostRows
 		}
 
+	case "hash":
+		operation.Action = ActionHashRange
+		operation.Field = access.Field
+		operation.Decode = access.Decode
+		// No index. A hashRange walks key order and validateOperation
+		// refuses anything else, so reading access.Index here would be
+		// carrying a word to a refusal it could have been spared.
+		operation.From = endpoint(access.From)
+		operation.To = endpoint(access.To)
+
+		// Asked for rather than capped — see Explore's own doc for why this
+		// one access cannot borrow the shell's usual answer.
+		if access.Limit <= 0 {
+			return Operation{}, fmt.Errorf("%w: a hash says how far to walk — it refuses at its limit rather than stopping short, so a limit this shell picked for you would refuse a file it should have hashed", ErrDeclaration)
+		}
+		operation.Limit = access.Limit
+
 	default:
-		return Operation{}, fmt.Errorf("%w: a shell can get, scan or count, not %q", ErrDeclaration, access.Kind)
+		return Operation{}, fmt.Errorf("%w: a shell can get, scan, count or hash, not %q", ErrDeclaration, access.Kind)
 	}
 
 	// Named after what it does, because this is a draft of a declaration and a
