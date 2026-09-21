@@ -6,5 +6,11 @@ dist/
 *.db
 .DS_Store
 
+# bench/run.sh writes its report here under whatever name BENCH_OUT says, and
+# `latest` is the name it uses when nobody says. A baseline that is meant to be
+# kept is committed under a name with a date in it; an ad-hoc run is not source.
+bench/results/latest.md
+bench/results/latest.jsonl
+
 # Worktrees the agent tooling creates here. Local state, never source.
 .claude/

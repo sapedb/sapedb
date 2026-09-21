@@ -19,7 +19,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # TestAStampedBuildSaysWhatItWasStampedWith.
 STAMP := -X github.com/sapedb/sapedb/internal/build.Version=$(VERSION)
 
-.PHONY: test vet build dist dist-cross checksums verify-dist image run
+.PHONY: test vet build dist dist-cross checksums verify-dist image run bench
 test:
 	$(GO) test ./...
 vet:
@@ -171,3 +171,13 @@ run: image
 		-e SAPEDB_INSECURE=1 \
 		-v sapedb-data:/var/lib/sapedb \
 		sapedb:latest
+
+# bench measures this tree under a small VPS's limits and writes a report. It
+# builds its own images from here, so the number it produces belongs to this
+# commit; see bench/README.md for what layer that number is measured at, and
+# for the caveats that have to travel with it.
+#
+# Not part of `test`, and deliberately not reachable from it: it takes minutes,
+# needs docker, and answers a different question.
+bench:
+	./bench/run.sh

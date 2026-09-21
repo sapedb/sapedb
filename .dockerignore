@@ -1,7 +1,16 @@
 # Only what the build needs. Everything else makes the context bigger and the
 # cache worse, and some of it must never be in an image at all.
+#
+# Two contexts read this file, not one: the server image (../Dockerfile) and
+# the benchmark rig's load generator (bench/Dockerfile), which is built from
+# this same root because it imports this repository's own client. The last
+# three lines are for that second build and are copied by nothing in the
+# server image — sapedb.go is the client package, bench/ is the load
+# generator, and the server's Dockerfile names neither.
 *
 !go.mod
 !go.sum
 !internal/
 !cmd/
+!sapedb.go
+!bench/

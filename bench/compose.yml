@@ -1,0 +1,82 @@
+# The benchmark rig. This is NOT the file to copy when deploying sapedb —
+# that one is ../docker-compose.yml, which has TLS, encryption at rest and a
+# secret that does not live in the file. This one deliberately has none of
+# those, because it exists to measure the engine under a memory limit and
+# every layer left in the way is a layer in the number.
+#
+# It is driven by bench/run.sh, which sets every variable below. Running
+# `docker compose -f bench/compose.yml up` by hand will refuse rather than
+# start with defaults: a profile with no limits is the one run whose numbers
+# would be silently meaningless.
+name: sapedb-bench
+
+services:
+  # The thing being measured. It gets the limits; nothing else does.
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        # So `sapedb version` and the daemon's first log line name the commit
+        # this image was built from. A number that cannot be attributed to a
+        # commit is not a measurement of anything.
+        VERSION: ${BENCH_COMMIT:?run this through bench/run.sh}
+    image: sapedb-bench-server:${BENCH_COMMIT:?run this through bench/run.sh}
+    container_name: sapedb-bench-server
+    # No restart. If the memory limit kills this process, the rig has to be
+    # able to see that it died — a container that comes back up on its own
+    # turns the one event this rig is looking for into a gap in a graph.
+    restart: "no"
+    environment:
+      SAPEDB_SECRET: ${BENCH_SECRET:?run this through bench/run.sh}
+      SAPEDB_ADDR: ":7433"
+      SAPEDB_DIR: /var/lib/sapedb
+      # Plaintext, and no encryption at rest. Both are deliberate and both are
+      # printed in the report: what is measured here is the store and the
+      # protocol, not TLS handshakes or AES.
+      SAPEDB_INSECURE: "1"
+      SAPEDB_SHUTDOWN: 5s
+
+    # The constrained profile. run.sh sets these per profile — tiny (1 cpu,
+    # 512m), small (1 cpu, 1g), medium (2 cpus, 2g) — so a reader sees the
+    # shape of the curve rather than one point.
+    cpus: ${BENCH_CPUS:?run this through bench/run.sh}
+    mem_limit: ${BENCH_MEMORY:?run this through bench/run.sh}
+
+    # This line is the difference between a benchmark and a decoration.
+    #
+    # memswap_limit is the limit on memory PLUS swap. Setting it equal to
+    # mem_limit leaves the container zero swap, which is the only way the
+    # memory limit is a wall. Leave it out and docker allows swap up to twice
+    # mem_limit: the container then swaps instead of hitting the limit, every
+    # number comes back looking healthy, and the machine we are actually
+    # worried about — a small VPS whose real failure is running out of memory
+    # — is the one thing that never gets measured.
+    #
+    # It is the same variable as mem_limit on purpose, not a copy of its
+    # value: the two cannot drift apart in an edit.
+    memswap_limit: ${BENCH_MEMORY:?run this through bench/run.sh}
+
+    volumes:
+      # A real volume, not the container's writable layer. The rig destroys it
+      # between profiles (`down -v`), so every profile starts from an empty
+      # database rather than inheriting the previous one's file and page
+      # cache.
+      - data:/var/lib/sapedb
+
+  # The load generator. Deliberately unlimited: if it shared the server's
+  # limits, the memory sampled off the server's container would be partly the
+  # benchmark's own, and the one number this rig exists to produce would be
+  # measuring the wrong process.
+  bench:
+    build:
+      context: ..
+      dockerfile: bench/Dockerfile
+    image: sapedb-bench-load:${BENCH_COMMIT:?run this through bench/run.sh}
+    environment:
+      SAPEDB_SECRET: ${BENCH_SECRET:?run this through bench/run.sh}
+    depends_on:
+      - server
+
+volumes:
+  data:

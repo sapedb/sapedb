@@ -64,6 +64,75 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **There is now a benchmark, and it measures this store under a small VPS's
+  limits rather than on a laptop with everything switched off.** There was no
+  performance measurement in this repository at all before this — no
+  `func Benchmark`, no rig, nothing — so every sentence anyone has ever written
+  about how fast this is was a sentence nobody had measured. `bench/` is the
+  rig: `./bench/run.sh` (or `make bench`) builds the server image from the tree
+  it is standing in, runs it under three profiles in turn — 1 cpu/512m, 1 cpu/1g,
+  2 cpus/2g — drives one workload at it over the wire, samples the container's
+  memory from outside while it does, pushes one profile until it runs out of
+  memory, writes a report, and takes the stack and its volume down again.
+
+  **`memswap_limit` is set equal to `mem_limit` on every profile, and that line
+  is the whole exercise.** It bounds memory *plus* swap; leave it out and docker
+  allows swap up to twice `mem_limit`, so the container swaps instead of hitting
+  the wall, every number comes back looking healthy, and the one machine this
+  rig exists to say something about is the one thing that never gets measured.
+  `run.sh` reads the applied limits back off the running container and prints
+  them into the report rather than trusting that the compose keys did anything.
+
+  **The workload is the application's, not a synthetic one**: a ten-megabyte
+  file stored as five thousand base64 rows of two kilobytes under keys shaped
+  `<id>/000000`, read back by a paginated prefix scan with an exclusive `from`
+  and a limit declared in the operation, and deleted one row per request —
+  which is the baseline `deleteRange` (SAPE-32) has to be compared against, so
+  it is recorded carefully rather than in passing.
+
+  **The first run is committed as `bench/results/baseline-2026-09-21.md`,** and
+  it says on its face that it is one machine on one day. Every number in it
+  carries the commit, the applied limits, the fact that swap was off, the host,
+  the runs it was measured over and its min/median/max — and the caveat that
+  Docker Desktop on macOS is a Linux VM whose disk is not a VPS's, which is why
+  these are shapes rather than promises.
+
+  **What the first run found, and it is not the number anyone expected to care
+  about.** Steady-state memory for this workload never left 16–20 MiB on any
+  profile, 512m included: the store is not what fills a small machine. What
+  fills it is one read. A scan whose declared limit is far above what the
+  collection holds — an operation declared once, when the collection was small —
+  builds every row in memory first: past about ten thousand rows the answer is
+  over `protocol.MaxPayload` and the server hangs the connection up, and it does
+  that having *already paid the memory for the answer it cannot send*. The
+  frame cap is a guard in front of the wall that does not stop anybody reaching
+  it: on the 512m profile the same read was still hanging up at forty thousand
+  rows and took the process with it at forty-five thousand — exit 137,
+  `OOMKilled: true`. Nothing in the store's own accounting is wrong there; the
+  declared limit was honoured. It is just that "how many rows" is not "how much
+  memory", and on a machine with 512 MB those are not close enough to be the
+  same promise. Written down here rather than fixed, because fixing it is a
+  design decision about streaming a read, not a patch.
+
+  **The second thing it found is the delete baseline itself.** Deleting five
+  thousand rows one request at a time got monotonically slower every time it was
+  done: 1097, 737, 561, 409 and then 304 rows/second over five consecutive
+  files on the 512m profile — and 1109→322 and 1140→326 on the other two, which
+  is the same curve three times rather than noise. Nothing here says why, and
+  this rig cannot: it measures from outside the process. It is written down as
+  the shape `deleteRange` (SAPE-32) has to beat, and as a question — a store
+  whose delete rate falls by a factor of three and a half over twenty-five
+  thousand deletes is a store with something growing in it.
+
+  **Nothing here runs as part of `go test ./...`.** The load generator is a
+  `main` that needs a server to point at; the only tests in `bench/` are for the
+  two functions that compute min/median/max, and they take microseconds. There
+  is still no `func Benchmark` in this tree, on purpose: Go's benchmark runner
+  picks its own iteration count and reports one number, and this rig has to
+  report a range over a fixed number of runs, pair each phase with a peak memory
+  sampled from outside the container by the host, and survive the process under
+  test being killed halfway through.
+
 - **CI follows the worked example from cold on a machine that is not the
   author's (SAPE-12, criterion 3).** Every command on
   `docs/external-operations-page.md` had been run once, by hand, on one laptop,
