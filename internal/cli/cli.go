@@ -41,6 +41,8 @@ const passwordAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
 const usage = `sapedb — set up and look inside a database
 
   sapedb [options] apply FILE...     declare collections and operations
+  sapedb [options] verify FILE       check a signed bundle, and say what it holds
+  sapedb [options] install FILE      declare everything a signed bundle holds
   sapedb [options] ls                what this database holds
   sapedb [options] dump              write a dump to stdout
   sapedb [options] restore           read a dump from stdin, into an empty database
@@ -58,6 +60,12 @@ options
 SAPEDB_SECRET is read from the environment. It is what connection strings are
 signed with and what database encryption keys are derived from, so a command
 run with the wrong one either refuses or writes a file the server cannot read.
+
+SAPEDB_TRUST is whose signed bundles this host will look at, written
+label=key and separated by commas or newlines, where key is the 64 lower-case
+hex characters of an ed25519 public key. Unset is an empty list, and an empty
+list refuses every bundle and says so — there is no spelling that means
+"trust anything". "verify" and "install" read it; nothing else does.
 
 A password is never taken as an argument: arguments are visible to anyone who
 can run ps. "url" makes one and prints it as part of the connection string,
@@ -88,6 +96,13 @@ type options struct {
 	encrypt bool
 	secret  string
 	label   string
+	// lookup is the environment this command was given, kept so that a
+	// command needing a variable no other command reads does not have to add
+	// a field here for it. SAPEDB_TRUST is the first: it is read only by
+	// verify and install, it is parsed by internal/bundle rather than here,
+	// and a long list of keys is not something the other seven commands
+	// should be carrying a copy of.
+	lookup func(string) (string, bool)
 }
 
 func run(args []string, lookup func(string) (string, bool), stdin io.Reader, stdout io.Writer) error {
@@ -124,6 +139,7 @@ func run(args []string, lookup func(string) (string, bool), stdin io.Reader, std
 		secret:  get("SAPEDB_SECRET", ""),
 		encrypt: strings.EqualFold(get("SAPEDB_ENCRYPT", ""), "1") || strings.EqualFold(get("SAPEDB_ENCRYPT", ""), "true"),
 		label:   label,
+		lookup:  lookup,
 	}
 
 	rest, err := parse(args, &opts)
@@ -262,6 +278,31 @@ var commands = []command{
 		},
 	},
 	{
+		// Not standalone, and not opens either: verify names no database,
+		// but it is not about the tool the way version is — it is about a
+		// file. It still runs before the secret/account/name gates, because
+		// deciding whether to trust a bundle has nothing to do with which
+		// database it might later be installed into, and somebody asked to
+		// review a file may well not hold the secret at all.
+		name:       "verify",
+		standalone: true,
+		check:      checkVerify,
+		run: func(opts options, _ *store.Store, args []string, _ io.Reader, out io.Writer) error {
+			return verify(opts, args[0], out)
+		},
+	},
+	{
+		name:  "install",
+		opens: true,
+		check: checkInstall,
+		run: func(opts options, db *store.Store, args []string, _ io.Reader, out io.Writer) error {
+			// No Caller built here, unlike apply just above: what the change
+			// log records is the bundle and the key that signed it, which is
+			// inside the file and not in opts. See installedBy.
+			return install(db, opts, args[0], out)
+		},
+	},
+	{
 		name:  "ls",
 		opens: true,
 		check: checkNoArguments("ls"),
@@ -324,10 +365,9 @@ var commands = []command{
 	{
 		name:  "version",
 		opens: false,
-		// The only command in this table that names no database, which is
-		// what standalone says and why it is not merely opens:false. url and
-		// shell also leave the file alone, but they still need an account, a
-		// name and a secret to sign or connect with. Asking a binary what it
+		// Standalone, which is not merely opens:false: url and shell also
+		// leave the file alone, but they still need an account, a name and a
+		// secret to sign or connect with. Asking a binary what it
 		// is must work before any of those exist — on a host with no
 		// databases, in a container someone is trying to identify, in a bug
 		// report written by somebody who was never given the secret.
@@ -340,8 +380,9 @@ var commands = []command{
 	},
 }
 
-// findCommand looks a name up in commands. A linear scan over seven entries
-// is not a data structure decision worth a map: this runs once per process.
+// findCommand looks a name up in commands. A linear scan over a table this
+// size is not a data structure decision worth a map: this runs once per
+// process.
 func findCommand(name string) (command, bool) {
 	for _, c := range commands {
 		if c.name == name {

@@ -187,6 +187,28 @@ The server refuses to start without TLS unless `SAPEDB_INSECURE=1` says you mean
 it. The Docker image ships the server binary and nothing else — no shell, no
 package manager, no libc.
 
+### Installing a signed bundle
+
+A bundle is the same two lists `sapedb apply` reads — collections and
+operations — with a name, an author and an ed25519 signature on them. It
+carries no code, so a verified bundle widens what a database holds, never what
+the server is able to do.
+
+    export SAPEDB_TRUST='acme-eng=3f0b…64 hex chars, partner-co=9c1d…64 hex chars'
+    sapedb verify ledger-pack.bundle
+    sapedb install ledger-pack.bundle
+
+`SAPEDB_TRUST` is whose bundles this host will look at, written `label=key`
+and separated by commas or newlines. Unset is an empty list, and an empty list
+refuses every bundle and says so — there is no value that means "trust
+anything". The label is local: `verify` prints it beside the name the bundle
+claims for its author, and comparing those two is the whole of the name
+binding, because there is no PKI here.
+
+`verify` opens no database, needs no secret and touches no network. `install`
+declares everything the bundle carries or none of it, and records the bundle
+and the key in the change log rather than the account that ran the command.
+
 ### Following another server
 
     export SAPEDB_FOLLOW='sapedb://acme:...@leader:7433/main?sig=...'

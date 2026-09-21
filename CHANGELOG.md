@@ -7,6 +7,77 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Added
 
+- **A signed bundle can now be checked and installed (SAPE-28).** SAPE-10
+  could seal and verify one and stopped there: nothing read a trusted key out
+  of any configuration, and none of the six `bundle_*` refusal codes in
+  `internal/server` had a call site. This is the install path, and it is two
+  commands and one environment variable.
+
+  **`SAPEDB_TRUST` is how an operator says whose bundles this host will look
+  at.** Written `label=key`, entries separated by commas or newlines, where
+  `key` is the 64 lower-case hex characters of an ed25519 public key:
+
+  ```
+  SAPEDB_TRUST='acme-eng=3f0b…, partner-co=9c1d…'
+  ```
+
+  An environment variable rather than a file, because that is the only
+  configuration surface this product has — `internal/service.FromEnv` reads
+  every setting `sapedbd` has out of the environment, there is no
+  configuration file anywhere in the tree, and a trust file would itself need
+  an environment variable to name it. Unset, empty, or whitespace is an empty
+  list, and an empty list is **not** permission: every bundle is refused with
+  `bundle.ErrNoTrust` ("no signer is trusted on this server, so no bundle can
+  be"), which is a fact about the server rather than about the file. There is
+  no spelling of `SAPEDB_TRUST` that means "trust anything", so no deployment
+  can reach that state by mistyping one. A malformed entry is refused by name
+  rather than dropped — an operator who mistyped a key is not told that nobody
+  is trusted — and one label over two keys is refused as well as one key under
+  two labels, because the label is what `verify` prints and what the change
+  log records.
+
+  **`sapedb verify FILE`** reads a bundle, runs the three checks, and prints
+  what it found. No database, no lock, no secret, no network: the person
+  deciding whether to trust a file may not hold this server's secret and may
+  not have picked a database for it. It prints the bundle's self-asserted
+  `signer` **beside** the label this operator wrote next to that key, because
+  the difference between those two is the only identity fact a bundle carries
+  — there is no PKI here, and a person comparing them is the whole of the name
+  binding. It prints the declarations too, under a heading that says out loud
+  when nothing below is vouched for. The report is printed for a refused
+  bundle as well as an accepted one; the exit status is the summary, the
+  report is the point.
+
+  **`sapedb install FILE`** hands a verified bundle's `Collections` and
+  `Operations` to the same `db.Declare` / `db.DeclareOperation` loop `apply`
+  already runs — which is the whole reason a bundle carries those two lists
+  and not a container of its own — including `apply`'s "already there,
+  unchanged" skip, so re-installing a release does not hand every caller a new
+  operation version. It is refused before the database is opened at all, so a
+  bundle nobody trusts leaves no lock, no account folder and no empty database
+  behind.
+
+  **It installs all of the bundle or none of it.** There is no uninstall, so a
+  half-installed bundle is a database holding collections whose operations
+  were never declared, with no way back — and it is the one state that cannot
+  be recovered by running the command again. One transaction, one `Commit` at
+  the end, and an explicit `Rollback` on any refusal so that a caller holding
+  the same open store is not handed declarations that will never be committed.
+  Measured both ways: a copy that commits per collection leaves the first one
+  behind, and a copy with the `Rollback` removed leaves it in the open store.
+
+  **The change log records the bundle and the key, not the account.** Every
+  entry an install writes carries
+  `bundle "name" "version" signed by <64 hex>, trusted here as "label"`. This
+  is the only record anywhere that a declaration came from outside — what a
+  bundle installs is afterwards indistinguishable from one written by hand —
+  and the key is the one fact on this path that anything actually checked. The
+  key is written in full, because a truncated key cannot be compared against a
+  trust list. `store.ErrIncompatible` — two bundles fighting over a collection
+  name, which is settled here and not at verification — arrives wrapped with
+  `%w` and intact, so `internal/server`'s `codeFor` still names it
+  `incompatible` rather than `failed`.
+
 - **`sapedbd` reloads part of its configuration on SIGHUP, and says exactly
   what it did (SAPE-7).** `SAPEDB_SHUTDOWN` and a rotated
   `SAPEDB_TLS_CERT`/`SAPEDB_TLS_KEY` pair take effect without a restart, with

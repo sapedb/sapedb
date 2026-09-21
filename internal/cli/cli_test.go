@@ -541,6 +541,8 @@ var pinnedPhrases = map[string]string{
 	"apply/broken json":               "unexpected EOF",
 	"apply/unknown field":             `json: unknown field "unexpectedField"`,
 	"apply/conflicting redeclaration": `collection "articles": sapedb/store:`,
+	"verify/no file":                  "verify takes one bundle file",
+	"install/no file":                 "install takes one bundle file",
 	"log/not a number":                "is not an entry number",
 	"log/too many arguments":          "log takes at most one argument, FROM",
 	"ls/no arguments":                 "ls takes no arguments",
@@ -1651,6 +1653,8 @@ type rejectionCase struct {
 // 16 was rewritten for, above.
 var rejectionCases = map[string]rejectionCase{
 	"apply":   {args: []string{"apply"}, wants: "apply needs a file"},
+	"verify":  {args: []string{"verify"}, wants: "verify takes one bundle file"},
+	"install": {args: []string{"install"}, wants: "install takes one bundle file"},
 	"ls":      {args: []string{"ls", "junk"}, wants: "ls takes no arguments"},
 	"dump":    {args: []string{"dump", "junk"}, wants: "dump takes no arguments"},
 	"restore": {args: []string{"restore", "junk"}, wants: "restore takes no arguments"},
