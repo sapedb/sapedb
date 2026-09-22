@@ -10,6 +10,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 COPY internal ./internal
 COPY cmd ./cmd
+COPY scripts ./scripts
 
 # VERSION is what the server inside this image says it is, in the welcome it
 # sends every client. The default is what an unstamped build says anyway, so
@@ -21,15 +22,25 @@ COPY cmd ./cmd
 # than being discovered here.
 ARG VERSION=dev
 
+# STAMP is this file's one spelling of internal/build.Path, written once and
+# read by both steps below — the check and the build — so the two cannot
+# disagree with each other, only with Go. Docker cannot read a Go constant any
+# more than make can; the same test guards this line as guards the Makefile's.
+ARG STAMP="-X github.com/sapedb/sapedb/internal/build.Version=${VERSION}"
+
+# The linker accepts an -X for a symbol that does not exist, does nothing with
+# it, and exits 0, so an image built after a rename would ship a binary calling
+# itself "dev" and nothing here would have said a word (ISS-18). This resolves
+# the line above through the Go toolchain first, and fails the build if it
+# names nothing.
+RUN ./scripts/check-stamp-symbol.sh "$STAMP"
+
 # Static: the runtime image has no dynamic loader to find a library with.
 # Stripped: the symbol table is of no use in production and is of some use to
 # whoever is reading the binary.
-#
-# The -X path is internal/build.Path. Docker cannot read a Go constant either;
-# the same test guards this line as guards the Makefile's.
 ENV CGO_ENABLED=0
 RUN go build -trimpath \
-	-ldflags="-s -w -X github.com/sapedb/sapedb/internal/build.Version=${VERSION}" \
+	-ldflags="-s -w $STAMP" \
 	-o /sapedbd ./cmd/sapedbd
 
 # The data directory is made here, with its ownership, because the runtime

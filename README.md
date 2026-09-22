@@ -174,6 +174,12 @@ themselves identically. Build with `make dist`, or stamp it by hand:
 
     go build -ldflags "-X github.com/sapedb/sapedb/internal/build.Version=$(git describe --tags)" ./cmd/...
 
+The linker accepts that `-X` for a symbol that does not exist, does nothing
+with it and exits 0, so a mistyped path stops the stamping without failing
+anything — which is why `make check-stamp` resolves the path through the Go
+toolchain before any target here builds with it, and why the Dockerfile's build
+stage and `.github/workflows/release.yml` run the same check. See ISS-18.
+
 A binary nobody stamped says `dev`, which is a word no release will be called.
 Nothing here checks for or installs a newer version; asking what this is and
 going to get another one are different jobs, and only the first one is here.

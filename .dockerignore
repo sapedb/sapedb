@@ -3,14 +3,17 @@
 #
 # Two contexts read this file, not one: the server image (../Dockerfile) and
 # the benchmark rig's load generator (bench/Dockerfile), which is built from
-# this same root because it imports this repository's own client. The last
-# three lines are for that second build and are copied by nothing in the
-# server image — sapedb.go is the client package, bench/ is the load
-# generator, and the server's Dockerfile names neither.
+# this same root because it imports this repository's own client. The
+# sapedb.go and bench/ lines are for that second build and are copied by
+# nothing in the server image — sapedb.go is the client package, bench/ is the
+# load generator, and the server's Dockerfile names neither. scripts/ is the
+# other way round: the server image's build stage runs
+# scripts/check-stamp-symbol.sh before it links anything.
 *
 !go.mod
 !go.sum
 !internal/
 !cmd/
+!scripts/
 !sapedb.go
 !bench/

@@ -95,8 +95,20 @@ jobs:
           go vet ./...
           go test ./...
 
+      # Before anything is built, not after: `go build` accepts an -ldflags -X
+      # for a symbol that does not exist, does nothing with it and exits 0, so
+      # a release whose stamp has drifted looks exactly like one that worked
+      # until somebody runs the artifact (ISS-18). This resolves the Makefile's
+      # own -X string through the Go toolchain and fails here instead.
+      #
+      # GO=go, because this runner has the toolchain actions/setup-go just
+      # installed; the Makefile's default GO is a container, which would work
+      # too and would only be slower.
+      - name: Check the linker stamp names a symbol that exists
+        run: make check-stamp VERSION="${{ steps.mode.outputs.version }}" GO=go
+
       - name: Build every platform's binaries
-        run: make dist-cross VERSION="${{ steps.mode.outputs.version }}"
+        run: make dist-cross VERSION="${{ steps.mode.outputs.version }}" GO=go
 
       - name: Checksums
         run: make checksums VERSION="${{ steps.mode.outputs.version }}"

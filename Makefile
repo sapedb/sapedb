@@ -13,23 +13,41 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # The path here is internal/build.Path, spelled out because make cannot read a
 # Go constant. Moving or renaming that package without changing this line does
-# not fail the build — the linker accepts an -X for a symbol that does not
-# exist and does nothing — so the guard is a test that stamps a binary through
-# this same flag and refuses the default: see
-# TestAStampedBuildSaysWhatItWasStampedWith.
+# not fail the build on its own — the linker accepts an -X for a symbol that
+# does not exist and does nothing — so every target below that builds anything
+# goes through check-stamp first, which resolves this exact string through the
+# Go toolchain and refuses to let the build start if it names nothing. See also
+# TestAStampedBuildSaysWhatItWasStampedWith, which stamps a binary through the
+# same flag and refuses the default.
 STAMP := -X github.com/sapedb/sapedb/internal/build.Version=$(VERSION)
 
-.PHONY: test vet build dist dist-cross checksums verify-dist image run bench
+.PHONY: test vet check-stamp build dist dist-cross checksums verify-dist image run bench
 test:
 	$(GO) test ./...
 vet:
 	$(GO) vet ./...
-build:
+
+# check-stamp is the answer to the question ISS-18 asks: a guard that lives
+# only in Go cannot see the string above, because make is not Go. This one can
+# — it is handed that string, and hands it to the Go toolchain to resolve.
+#
+# It runs before anything is built rather than after, so the failure lands on
+# the person who mistyped the path instead of on whoever later reads a release
+# artifact that says "dev". It also refuses an empty VERSION, the other way an
+# -X stamps nothing without saying so.
+#
+# $(GO) is passed through, so this costs a docker-only tree nothing it was not
+# already paying for `build` and `dist`; a tree with its own toolchain runs it
+# with `make ... GO=go`, which is what .github/workflows/release.yml does.
+check-stamp:
+	@GO="$(GO)" ./scripts/check-stamp-symbol.sh "$(STAMP)"
+
+build: check-stamp
 	$(GO) build -ldflags "$(STAMP)" ./...
 
 # dist is the one that produces binaries somebody keeps. build only checks
 # that the tree compiles.
-dist:
+dist: check-stamp
 	$(GO) build -trimpath -ldflags "-s -w $(STAMP)" -o bin/sapedb ./cmd/sapedb
 	$(GO) build -trimpath -ldflags "-s -w $(STAMP)" -o bin/sapedbd ./cmd/sapedbd
 
@@ -65,7 +83,7 @@ CROSS_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64
 # developer building for themselves keeps getting exactly what they always
 # got: two binaries, for their own machine, without waiting on four
 # platforms they are not going to run.
-dist-cross:
+dist-cross: check-stamp
 	@mkdir -p dist
 	@for platform in $(CROSS_PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
@@ -162,6 +180,10 @@ verify-dist:
 		exit 1; \
 	fi
 
+# No check-stamp here on purpose: the Dockerfile has its own spelling of the
+# -X path, and checking this Makefile's spelling would be checking the wrong
+# string. The Dockerfile runs the same script on its own, inside the build
+# stage, so `docker build` fails there instead.
 image:
 	docker build --build-arg VERSION="$(VERSION)" -t sapedb:latest .
 

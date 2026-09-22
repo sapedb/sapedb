@@ -248,6 +248,46 @@ recorded, so its absence is not a claim that nothing changed before it.
   with exactly that error on `entries-2026-09.part`. The severity was
   understated; the fix is the one line the ticket predicted.
 
+- **A linker stamp aimed at a symbol that does not exist now fails the build
+  instead of being accepted in silence (ISS-18).** `go build -ldflags "-X
+  some/package.Variable=value"` does nothing at all when `some/package.Variable`
+  does not exist: no warning, no error, exit 0, and a binary that reports `dev`.
+  Measured again at this commit with Go 1.27.1, darwin/arm64, three builds of
+  `./cmd/sapedb`:
+
+  | stamp | build | `sapedb version` says |
+  | --- | --- | --- |
+  | `…/internal/build.Version=9.9.9` | exit 0, silent | `sapedb 9.9.9` |
+  | `…/internal/build.Verzion=9.9.9` | exit 0, silent | `sapedb dev` |
+  | `…/internal/buildinfo.Version=9.9.9` | exit 0, silent | `sapedb dev` |
+
+  The symbol has to be spelled by hand wherever a Go constant cannot be read,
+  and that is now four places, not two: `Makefile`, `Dockerfile`, `README.md`
+  (which hands a stranger a `go build` line to paste) and this repository's own
+  check script. `scripts/check-stamp-symbol.sh` is what closes it. It is handed
+  the exact `-X` argument a build is about to use and resolves it through the Go
+  toolchain before anything is linked — so a wrong spelling fails where it was
+  typed, not on a release artifact somebody else is holding. `make build`,
+  `make dist` and `make dist-cross` all go through it, the Dockerfile's build
+  stage runs it before `go build`, and `.github/workflows/release.yml` runs it
+  as a step of its own. It also refuses an empty value, the second way an `-X`
+  stamps nothing without saying so.
+
+  **What the existing guard covered, and what it did not.**
+  `TestTheBuildFilesStampTheSymbolThisPackageActuallyExports` required the
+  `Makefile` and the `Dockerfile` each to *contain* the right `-X`. Present is
+  not used, and it read only those two files, so all of these kept it green: a
+  second, misspelled stamp added alongside the right one; a `dist` recipe that
+  stopped passing `$(STAMP)` while still defining it; a `README.md` teaching a
+  path that no longer exists; a release workflow that stopped calling `make`.
+  Three new tests close those, and the file list now includes `README.md`:
+  `TestNoFileInThisRepositoryStampsASymbolThisPackageDoesNotExport` walks the
+  whole tree and requires every stamp naming a symbol inside this module to be
+  `build.Path` exactly; `TestEveryLinkOptionInTheBuildFilesCarriesTheStamp`
+  requires every `-ldflags` line in make and docker to carry the stamp;
+  `TestEveryBuildPathChecksItsStampBeforeItUsesIt` requires the three release
+  paths to keep calling the script, because deleting a guard is always green.
+
 - **Every read in `examples/ledger` now declares a `projection` (ISS-19).** The
   worked example had three reads — `orders.get`, `payments.of_order`,
   `entries.of_account` — and none of them named a field, so `sapedb-types`
