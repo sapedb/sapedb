@@ -118,6 +118,47 @@ recorded, so its absence is not a claim that nothing changed before it.
   *refused* by this; it simply forgets who owned what. Adding a claim line to a
   dump is a dump-format change and belongs to its own ticket.
 
+### Fixed
+
+- **Every read in `examples/ledger` now declares a `projection` (ISS-19).** The
+  worked example had three reads — `orders.get`, `payments.of_order`,
+  `entries.of_account` — and none of them named a field, so `sapedb-types`
+  generated `row: Record<string, unknown>` for all three. That is a valid
+  answer and the store will serve such a read forever; it is simply not what an
+  example should be demonstrating, because an example is copied. SAPE-13 writes
+  the rule down — arguments are always described, a row shape only where a
+  projection says so — and the file a stranger reads first was the one file
+  contradicting it.
+
+  The ticket was triaged *Defer* and that triage is overridden deliberately,
+  not quietly. What changed is SAPE-12's first criterion: it is measured by a
+  stranger writing a module from the published material, and four pages of that
+  material quote this schema. A deferred defect that teaches the wrong thing to
+  the people an acceptance criterion depends on is not the defect it was when it
+  was deferred.
+
+  **Each projection leaves something out, because a projection that names every
+  field teaches nothing.** `orders.get` returns `id`, `status`, `total` and
+  `paid_at` and not `customer`: a payment flow asking whether an order is paid
+  has no use for who placed it, and a field a read does not name never leaves
+  the database. The two scans leave out the field they are bounded by —
+  `payments.of_order` does not return `order`, `entries.of_account` does not
+  return `account` — because that value is the argument the caller passed in,
+  and sending it back on every one of fifty or five hundred rows is paying for
+  what was already known. `paid_at` is named although an unpaid order does not
+  have it, which is why a generated projected field is optional; measured, the
+  same order answers `{id, status, total}` before payment and
+  `{id, paid_at, status, total}` after.
+
+  `examples/ledger/run.mjs` reads the link between a payment and its ledger
+  lines from the payment's generated key now rather than from the `order` field
+  the projection withholds, which proves the same batch step wiring against a
+  value nothing knew before the call.
+
+  Supersedes the sentence in the *A worked external-operation module* entry
+  below that calls `examples/ledger` silent on `projection`. It was true when
+  it was written.
+
 ### Added
 
 - **`sapedb verify -envelopes`: a bundle's cost envelope, readable before it is

@@ -111,7 +111,8 @@
       "collection": "orders",
       "action": "get",
       "input": [{ "name": "id", "type": "string", "required": true }],
-      "key": { "arg": "id" }
+      "key": { "arg": "id" },
+      "projection": ["id", "status", "total", "paid_at"]
     },
     {
       "name": "payments.of_order",
@@ -121,7 +122,8 @@
       "limit": 50,
       "input": [{ "name": "order", "type": "string", "required": true }],
       "from": { "terms": [{ "arg": "order" }] },
-      "to": { "terms": [{ "arg": "order" }] }
+      "to": { "terms": [{ "arg": "order" }] },
+      "projection": ["id", "amount", "at", "reference"]
     },
     {
       "name": "entries.of_account",
@@ -131,7 +133,8 @@
       "limit": 500,
       "input": [{ "name": "account", "type": "string", "required": true }],
       "from": { "terms": [{ "arg": "account" }] },
-      "to": { "terms": [{ "arg": "account" }] }
+      "to": { "terms": [{ "arg": "account" }] },
+      "projection": ["id", "at", "side", "amount", "payment"]
     }
   ]
 }
