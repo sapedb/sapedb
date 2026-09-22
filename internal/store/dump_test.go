@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -412,6 +413,64 @@ func TestASnapshotHoldsTheLastCommitAndNotWorkInProgress(t *testing.T) {
 	}
 }
 
+// secretAuthor and secretSlug are the two values this test writes into its
+// documents and then goes looking for in the ciphertext.
+//
+// They are long, and their length is the point. Searching a buffer of
+// ciphertext for a short string is searching a buffer of random bytes: the
+// string turns up on its own. This test used to write "ann" as the author and
+// "s07" as the slug, three bytes each, and it went red about six runs in a
+// thousand with nothing wrong — 13 failures in 2000 runs when ISS-6 measured
+// it, 11 in 2000 when that measurement was repeated here, every one of them on
+// those two needles and never on the four longer ones. The arithmetic predicts
+// 11.7; both readings are that number and noise.
+//
+// The fix is not to stop asserting on them. "ann" was the value of an indexed
+// field and "s07" was the key of a unique index, which is to say the two most
+// interesting things in the file to find in the open; dropping them would have
+// left the test greener and blinder. They are written out at a length chance
+// cannot produce instead, and everything else about the assertion is
+// unchanged. See chanceOfTurningUpByItself, which refuses the needle list
+// before searching it, so a short needle added later fails at once and by
+// name rather than one run in a few hundred.
+const (
+	secretAuthor = "Ann Okonkwo-Vasquez"
+	secretSlug   = "secret-number-%02d-slug"
+)
+
+// falseRedBudget is how often this test is allowed to go red when nothing is
+// wrong: once in a hundred million runs, summed over every needle it searches
+// for. A number rather than a rule of thumb, because the thing it bounds is
+// arithmetic and can simply be computed.
+//
+// It is spent almost entirely on the shortest needle in the list, which today
+// is the field name "author": six bytes, about 1.9e-10 in the 53,248-byte
+// image this test produces. The two values above cost nothing measurable. That
+// leaves about fifty times more room than is being used, which is the point of
+// the size — the image may grow as this test's fixture does, and the budget
+// should be breached by somebody shortening a needle, not by somebody adding a
+// document. A five-byte needle in this image is 4.8e-8 and is refused.
+//
+// For scale, what this replaces: two three-byte needles in a 49,152-byte image
+// came to 5.9e-3 per run, or about one red in every 170.
+const falseRedBudget = 1e-8
+
+// chanceOfTurningUpByItself is the probability that a needle of this length
+// appears somewhere in a buffer of this size by chance alone, treating the
+// ciphertext as uniform random bytes: there are size-len+1 places it could
+// start, and each one matches with probability 256^-len.
+//
+// It overcounts slightly — the starting positions overlap, so the events are
+// not independent and the union bound is above the true probability — which is
+// the direction an error should go in a budget.
+func chanceOfTurningUpByItself(needle string, size int) float64 {
+	places := size - len(needle) + 1
+	if places <= 0 {
+		return 0
+	}
+	return float64(places) * math.Pow(1.0/256.0, float64(len(needle)))
+}
+
 // The end-to-end statement of what encryption at rest is for: a file taken off
 // the disk holds none of the documents in it, and the database still works.
 func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
@@ -433,8 +492,8 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 	}
 	for i := 0; i < 50; i++ {
 		put(t, collection, map[string]any{
-			"id": fmt.Sprintf("k%02d", i), "author": "ann",
-			"title": fmt.Sprintf("Secret number %d", i), "slug": fmt.Sprintf("s%02d", i),
+			"id": fmt.Sprintf("k%02d", i), "author": secretAuthor,
+			"title": fmt.Sprintf("Secret number %d", i), "slug": fmt.Sprintf(secretSlug, i),
 			"published": float64(i),
 		})
 	}
@@ -443,9 +502,35 @@ func TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk(t *testing.T) {
 	}
 
 	image := disk.Durable()
+
 	// Not the documents, not the field names, not the names of the collections
 	// or the indexes — all of those are written through the same pages.
-	for _, text := range []string{"Secret number 7", "author", "ann", "articles", "by_author", "s07"} {
+	needles := []string{
+		"Secret number 7",          // a value the caller wrote
+		"author",                   // the name of a field
+		secretAuthor,               // the value of that field, and an index key in by_author
+		"articles",                 // the name of the collection
+		"by_author",                // the name of an index
+		fmt.Sprintf(secretSlug, 7), // an index key: by_slug is unique and built on it
+	}
+
+	// Before searching for them: are these needles long enough that finding
+	// one would mean something? A needle short enough to turn up in random
+	// bytes makes this test a coin toss, and a security test that goes red at
+	// random is a security test people learn to re-run. See falseRedBudget.
+	spent := 0.0
+	for _, text := range needles {
+		chance := chanceOfTurningUpByItself(text, len(image))
+		spent += chance
+		if chance > falseRedBudget {
+			t.Fatalf("%q is %d bytes, so in a %d-byte image it turns up by chance alone with probability %.3g, over this test's whole budget of %.0g per run — write the value out longer rather than searching for a shorter one (ISS-6)", text, len(text), len(image), chance, falseRedBudget)
+		}
+	}
+	if spent > falseRedBudget {
+		t.Fatalf("the %d needles together turn up by chance alone with probability %.3g per run, over the budget of %.0g (ISS-6)", len(needles), spent, falseRedBudget)
+	}
+
+	for _, text := range needles {
 		if bytes.Contains(image, []byte(text)) {
 			t.Errorf("the file holds %q in the open", text)
 		}

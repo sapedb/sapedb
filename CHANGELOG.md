@@ -288,6 +288,29 @@ recorded, so its absence is not a claim that nothing changed before it.
   `TestEveryBuildPathChecksItsStampBeforeItUsesIt` requires the three release
   paths to keep calling the script, because deleting a guard is always green.
 
+- **The encryption-at-rest test no longer goes red at random (ISS-6).**
+  `TestAnEncryptedDatabaseKeepsItsDocumentsOffTheDisk` writes 50 documents to an
+  encrypted database and asserts six plaintext strings are absent from the
+  durable image. Two of the six were three bytes — `"ann"`, the author, and
+  `"s07"`, a unique-index key. A buffer of ciphertext is, to a search shorter
+  than the key, a buffer of random bytes: in the 49,152-byte image those two
+  needles turned up on their own with probability 5.9e-3 per run, about one red
+  in every 170. Measured: 13 failures in 2000 runs when ISS-6 measured it, 11 in
+  2000 when that was repeated here, arithmetic predicting 11.7, and every single
+  one of them on those two needles.
+
+  **The two values are still asserted.** Deleting them would have been the cheap
+  fix and it would have removed the two most interesting things in the file to
+  find in the open — an indexed field's value and a unique index's key. They are
+  written into the documents at a length chance cannot produce instead
+  (`"Ann Okonkwo-Vasquez"`, `"secret-number-07-slug"`), and nothing else about
+  the assertion changed. The test now also computes, before it searches, the
+  probability that each needle appears by chance in an image of the size it
+  actually built, and refuses a needle list that spends more than 1e-8 per run —
+  so a short needle added later fails on the first run and by name, instead of
+  one run in a few hundred. Measured after: 0 failures in 2000 runs, and 0 in
+  10,000.
+
 - **Every read in `examples/ledger` now declares a `projection` (ISS-19).** The
   worked example had three reads — `orders.get`, `payments.of_order`,
   `entries.of_account` — and none of them named a field, so `sapedb-types`
