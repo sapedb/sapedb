@@ -63,6 +63,69 @@ recorded, so its absence is not a claim that nothing changed before it.
   carried as a `json.Number` inside the CLI; it marshals to the same JSON it
   always did.
 
+- **The same refusal now covers a constant written into a DECLARATION, on every
+  path that accepts one, and this too is breaking in both directions
+  (ISS-35).** The entry above closed the `invoke` frame. A declaration does not
+  pass it. Measured on the commit that shipped the first half, with `sapedb
+  apply` and a schema file holding `"n": {"value": 9007199254740993}`:
+
+  | path | before | after |
+  | --- | --- | --- |
+  | `sapedb apply` | stored `9007199254740992`, exit 0 | refused, exit 1, nothing written |
+  | `sapedb install` / `verify` | installed `…992` under the author's signature | refused, exit 1, nothing written |
+  | `sapedb seal` | signed `…992` where the draft said `…993` | refused, exit 1, no bundle file |
+  | `sapedb shell` typed access | fetched the document under `…992` | refused, code `precision` |
+  | `Declare` / `Establish` frames | stored `…992` in the catalogue | refused, code `precision` |
+
+  A constant is worse than an argument, because it is stored once and then
+  written again by every call that runs the operation. The bundle row is worse
+  still: the signature is computed over the declarations **as parsed**, so both
+  spellings produced the same signed message — an author's signature over
+  `…992` verified a file edited to say `…993`, and always had. The signature
+  never protected the number, which is why the refusal is at the read and not
+  at the install.
+
+  **What now fails that used to work.** A schema file, a bundle, a typed access
+  at the operator shell, or a `Declare`/`Establish` frame carrying a plain
+  integer a `float64` does not hold exactly is refused. Deployments whose
+  schema files carry such a constant **will start failing at `apply`**, where
+  they used to succeed and store a neighbouring number.
+
+  **What now works that used to silently corrupt.** The refusal names the
+  value, what would otherwise have been stored, and which constant of which
+  declaration it was — `operation "ids.fixed".document.n.value` — and over the
+  wire it carries the same `precision` code the `invoke` frame uses. A refused
+  `apply` leaves **nothing** on disk: the check runs before the database file
+  is opened, so a database that did not exist is not created.
+
+  **It is one rule, not a second one.** The predicate moved from
+  `internal/server/number.go` to `internal/number`, which every door imports;
+  `internal/server` re-exports the same `ErrPrecision` value, so `codeFor` and
+  every `errors.Is` against it are unchanged. The boundary, the wording and the
+  code are identical because they are literally the same code. The walk into a
+  declaration is over the shape rather than over a list of field names, so a
+  constant added to `store.Operation` or `store.Access` tomorrow is covered
+  without anybody remembering to add it.
+
+  **Two limits, stated rather than hidden.**
+
+  - `sapedb seal` now refuses a draft whose constant cannot be written into a
+    bundle and read back as itself. A bundle re-emits its declarations as
+    marshalled values, so a constant is spelled the way a `float64` prints:
+    `9223372036854775808` is accepted everywhere else and comes out of a bundle
+    as `9223372036854776000`, which is a different integer and not one a
+    `float64` holds. Such a value can be declared with `apply` and **cannot be
+    published in a bundle**. The refusal is at `seal`, where the author is
+    still looking at the file, rather than at every operator's `install`.
+  - `sapedb restore` is the one path that does **not** check, deliberately. A
+    dump is this database's own printout, already spelled the way a `float64`
+    prints, so a checked restore would refuse dumps this database wrote. See
+    `store.Restore`'s comment and `TestADumpStillRestores`.
+
+  **The wire, the protocol and the conformance fixtures need nothing.** No
+  frame, field or code is added: `precision` already exists and already has its
+  row in `codeFor`. What changed is which handlers can raise it.
+
 - **An operation name is now `namespace:name`, and this is a breaking change to
   what a name means (SAPE-9).** It had to land before 1.0.0 or never: every
   separator is a legal operation name today — `internal/store`'s

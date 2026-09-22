@@ -94,6 +94,25 @@ point is the caller saying they are thinking in floats, and they are given float
 that `9.007199254740993e15` is *not* refused although `9007199254740993` is — the same value,
 written two ways. That is a known hole, pinned by a test, not an oversight.
 
+**The rule is one rule, and it applies at every door a number arrives through.** A value in a
+call (`invoke`), a constant written into a declaration (`sapedb apply`, `sapedb install`,
+`sapedb seal`, the `declare` and `establish` frames) and a value typed into an access at the
+operator shell (the `explore` frame) are all read the same way and refused in the same words,
+under the same `precision` code, by the same predicate in `internal/number`. A refused
+`sapedb apply` writes nothing at all — the check runs before the database file is opened.
+
+Two consequences of that are worth stating, because both are places where this database's own
+output is not accepted back as input:
+
+- **A bundle cannot carry every accepted value.** A bundle re-emits its declarations as
+  marshalled values, so a constant is spelled the way a double prints. `9223372036854775808`
+  is accepted everywhere else and comes out of a bundle as `9223372036854776000`, which is a
+  different integer and not one a double holds. `sapedb seal` refuses such a draft rather than
+  writing a bundle that `install` would reject.
+- **`sapedb restore` does not apply this rule.** A dump is this database's own printout, for
+  the same reason, so checking it would make dumps taken above 2<sup>53</sup> unrestorable.
+  Restore takes its numbers on trust, deliberately.
+
 **This is the one direction this rule can ever move.** Refusing a value that used to be
 accepted is a tightening, which section 3 permits before the tag and forbids after it, so it
 had to land in 1.0.0 or never. Carrying integers exactly (SAPE-30) is a *loosening* and may

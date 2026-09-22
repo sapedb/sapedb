@@ -26,6 +26,7 @@ import (
 	"github.com/sapedb/sapedb/internal/build"
 	"github.com/sapedb/sapedb/internal/dbkey"
 	"github.com/sapedb/sapedb/internal/dbname"
+	"github.com/sapedb/sapedb/internal/number"
 	"github.com/sapedb/sapedb/internal/pager"
 	"github.com/sapedb/sapedb/internal/signing"
 	"github.com/sapedb/sapedb/internal/store"
@@ -493,8 +494,44 @@ func checkApply(_ options, files []string) error {
 		wanted := schema{}
 		decoder := json.NewDecoder(strings.NewReader(string(content)))
 		decoder.DisallowUnknownFields()
+		decoder.UseNumber()
 		if err := decoder.Decode(&wanted); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
+		}
+		if err := exactSchema(name, &wanted); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// exactSchema refuses a schema file carrying a number this database cannot
+// store as it is written, and replaces every number that survives with the
+// float64 the store expects (ISS-35).
+//
+// It runs in two places — here in checkApply and again in apply() — and that
+// is deliberate, the same duplication checkApply's own comment describes. It
+// is one rule in both: both call internal/number, which is the function the
+// invoke door calls, so the two cannot drift. What is duplicated is only
+// *when* it runs.
+//
+// Running it in checkApply is what makes the refusal cost nothing. check runs
+// before open(), so a file carrying 9007199254740993 is refused before the
+// database is opened — before the directory is even created for a database
+// that does not exist yet. Nothing is written because nothing is opened.
+// Running it again in apply() is what keeps that true for a caller that
+// reaches apply() another way, and for a mutation that deletes the call above.
+func exactSchema(name string, wanted *schema) error {
+	for i := range wanted.Collections {
+		where := fmt.Sprintf("%s: collection %q", name, wanted.Collections[i].Name)
+		if err := number.ExactIn(where, &wanted.Collections[i]); err != nil {
+			return err
+		}
+	}
+	for i := range wanted.Operations {
+		where := fmt.Sprintf("%s: operation %q", name, wanted.Operations[i].Name)
+		if err := number.ExactIn(where, &wanted.Operations[i]); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -817,11 +854,21 @@ func apply(db *store.Store, files []string, out io.Writer, by store.Caller) erro
 			return err
 		}
 
+		// UseNumber, then exactSchema, before a single Declare — see
+		// exactSchema, and internal/number for why the check cannot live
+		// anywhere later than this Decode. A constant in a declaration was
+		// rounded exactly as silently as an argument was, and worse: it is
+		// stored once and then written again by every call that runs the
+		// operation.
 		wanted := schema{}
 		decoder := json.NewDecoder(strings.NewReader(string(content)))
 		decoder.DisallowUnknownFields()
+		decoder.UseNumber()
 		if err := decoder.Decode(&wanted); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
+		}
+		if err := exactSchema(name, &wanted); err != nil {
+			return err
 		}
 
 		for _, spec := range wanted.Collections {

@@ -203,6 +203,31 @@ func (n *Snapshot) Dump(out io.Writer) error {
 // It must be empty: restoring over a database that already holds something
 // would leave a mixture of two, which is neither of them and looks like a
 // working database.
+//
+// # Why this is the one path ISS-35 does not check
+//
+// Every other door a declaration or a constant comes through refuses a number
+// float64 cannot hold as written — `sapedb apply`, `sapedb install`, the
+// Declare, Establish, Explore and Invoke frames. This one does not, and the
+// reason is that a dump is not somebody's declaration. It is this database's
+// own printout, and the numbers in it are already spelled the way a float64
+// prints rather than the way anybody typed them.
+//
+// That spelling is not always a number float64 holds. A constant declared as
+// 9223372036854775808 is accepted — 2^63 is exactly a float64, nothing is lost
+// — and Write prints it as 9223372036854776000, because that is the shortest
+// decimal identifying that float64. Read back as a literal, 9223372036854776000
+// is a plain integer whose nearest float64 is 2^63, so the rule would refuse
+// it: a checked Restore would refuse this database's own dump, and the refusal
+// would say the value "would be stored as 9223372036854776000 instead", which
+// is the number it was given.
+//
+// Losing dump-and-restore, above 2^53, is a worse outcome than a hand-edited
+// dump carrying a number nobody can store — and a hand-edited dump is already
+// outside what this function can check, since it reinstalls specs and puts
+// documents without re-deriving anything. So this path takes its numbers on
+// trust, deliberately, and internal/cli's TestADumpStillRestores is what keeps
+// somebody from closing the gap and breaking the thing it protects.
 func (s *Store) Restore(in io.Reader) (uint64, error) {
 	// The log is what says a database has been used: declaring a collection is
 	// itself a change, so a database with anything in it — or with anything

@@ -135,6 +135,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sapedb/sapedb/internal/number"
 	"github.com/sapedb/sapedb/internal/store"
 )
 
@@ -573,8 +574,17 @@ func Seal(b *Bundle, key ed25519.PrivateKey) error {
 // content after the object is refused for the same reason: a file holding two
 // JSON objects must not verify as its first one.
 func Parse(raw []byte) (Bundle, error) {
+	// UseNumber, and then the check below, for the reason internal/number
+	// gives at length: a constant written into one of these declarations —
+	// `{"value": 9007199254740993}` — becomes a float64 at this Decode, and
+	// after that the digits the author wrote are gone. A bundle is the worst
+	// place for that to happen quietly, because it is the one artifact that
+	// travels: the author rounds it once, signs the rounded form, and every
+	// operator who installs it gets the same wrong number with a valid
+	// signature over it (ISS-35).
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
 
 	var b Bundle
 	if err := decoder.Decode(&b); err != nil {
@@ -582,6 +592,28 @@ func Parse(raw []byte) (Bundle, error) {
 	}
 	if decoder.More() {
 		return Bundle{}, fmt.Errorf("%w: there is more than one document in this file", ErrBundle)
+	}
+
+	// Checked here rather than in install, so that all three commands that
+	// read a bundle answer the same way about the same file: `seal` refuses
+	// to sign one, `verify` refuses to report on one, `install` refuses to
+	// declare one. Refusing at seal is the half that matters most — it is the
+	// only one that happens before the number has been signed and handed out.
+	//
+	// The refusal carries ErrPrecision rather than ErrBundle. The file is a
+	// perfectly good bundle; one value in it cannot be stored as written, and
+	// that is a different sentence with a different thing to do about it. It
+	// reaches a client as the "precision" code through the same codeFor row
+	// an invoke uses.
+	for i := range b.Collections {
+		if err := number.ExactIn(fmt.Sprintf("collection %q", b.Collections[i].Name), &b.Collections[i]); err != nil {
+			return Bundle{}, err
+		}
+	}
+	for i := range b.Operations {
+		if err := number.ExactIn(fmt.Sprintf("operation %q", b.Operations[i].Name), &b.Operations[i]); err != nil {
+			return Bundle{}, err
+		}
 	}
 	return b, nil
 }

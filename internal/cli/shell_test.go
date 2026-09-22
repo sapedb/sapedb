@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -62,13 +63,19 @@ func typed(t *testing.T, look Looking, lines ...string) string {
 // typed becomes exactly one access with exactly the bounds they meant. A
 // keyword read as a value, or a bound quietly dropped, is a different question
 // answered without anybody noticing.
+//
+// The numbers here are json.Number, not float64, and that is the assertion
+// rather than an artefact of it (ISS-35): what goes out is the digits that
+// were typed, so that the server — which is the authority on whether a value
+// can be stored as sent — still has them to look at. A float64 in this table
+// would mean the shell had rounded the key before anybody could refuse it.
 func TestWhatWasTypedIsWhatGoesOut(t *testing.T) {
 	for _, one := range []struct {
 		line   string
 		wanted store.Access
 	}{
 		{`get books "b1"`, store.Access{Kind: "get", Collection: "books", Key: "b1"}},
-		{`get books 12`, store.Access{Kind: "get", Collection: "books", Key: 12.0}},
+		{`get books 12`, store.Access{Kind: "get", Collection: "books", Key: json.Number("12")}},
 
 		{`scan books`, store.Access{Kind: "scan", Collection: "books"}},
 		{`scan books by_shelf`, store.Access{Kind: "scan", Collection: "books", Index: "by_shelf"}},
@@ -82,15 +89,15 @@ func TestWhatWasTypedIsWhatGoesOut(t *testing.T) {
 		// Several values are one composite bound, not several bounds.
 		{`scan books by_shelf from "history" 2 to "history" 9`, store.Access{
 			Kind: "scan", Collection: "books", Index: "by_shelf",
-			From: &store.Bound{Values: []any{"history", 2.0}},
-			To:   &store.Bound{Values: []any{"history", 9.0}},
+			From: &store.Bound{Values: []any{"history", json.Number("2")}},
+			To:   &store.Bound{Values: []any{"history", json.Number("9")}},
 		}},
 
 		// after and before are the same bounds, excluded.
 		{`scan books by_shelf after "history" 1 before "history" 9`, store.Access{
 			Kind: "scan", Collection: "books", Index: "by_shelf",
-			From: &store.Bound{Values: []any{"history", 1.0}, Exclusive: true},
-			To:   &store.Bound{Values: []any{"history", 9.0}, Exclusive: true},
+			From: &store.Bound{Values: []any{"history", json.Number("1")}, Exclusive: true},
+			To:   &store.Bound{Values: []any{"history", json.Number("9")}, Exclusive: true},
 		}},
 
 		{`count books by_shelf from "poetry"`, store.Access{

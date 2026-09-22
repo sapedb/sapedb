@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/sapedb/sapedb/internal/number"
 	"github.com/sapedb/sapedb/internal/store"
 )
 
@@ -85,9 +86,22 @@ func (s *Server) establish(live *session, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// Read without rounding and checked, exactly as declare does.
+	//
+	// A store.Spec carries no `any` field today — a key path, an index field
+	// and a rollup are all typed — so this check has nothing to refuse and is
+	// measured saying so (TestEstablishingACollectionIsWalkedEvenThoughASpecCarriesNoConstantToday).
+	// It is here anyway, and that is the point: the walk is over the shape
+	// rather than over a list of field names, so the day a collection gains a
+	// declared default or a partition constant, it is covered without anybody
+	// remembering this file exists. The failure mode of remembering is silent,
+	// which is the failure ISS-35 is about.
 	asked := establishing{}
-	if err := json.Unmarshal(payload, &asked); err != nil {
+	if err := unrounded(payload, &asked); err != nil {
 		return nil, fmt.Errorf("sapedb/server: the declaration does not read as one: %w", err)
+	}
+	if err := number.ExactIn(fmt.Sprintf("collection %q", asked.Spec.Name), &asked.Spec); err != nil {
+		return nil, err
 	}
 
 	// Reached exactly as a call reaches a database: being an operator says

@@ -295,8 +295,19 @@ func access(words []string) (store.Access, error) {
 			if err != nil {
 				return store.Access{}, err
 			}
-			count, isNumber := value.(float64)
-			if !isNumber || count != float64(int(count)) || count < 1 {
+			// literal hands back a json.Number now rather than a float64
+			// (ISS-35), so the whole-number check reads the value out of it
+			// instead of asserting float64. A limit is a row count this shell
+			// turns into an int before anything sees it — not a `number` the
+			// database stores — so ISS-35's refusal has nothing to say about
+			// it, and what matters here is only that `limit 100` still means
+			// a hundred rows, and `limit 1e2` still does too.
+			written, isNumber := value.(json.Number)
+			if !isNumber {
+				return store.Access{}, fmt.Errorf("limit takes a whole number of rows, not %s", rest[0])
+			}
+			count, notANumber := written.Float64()
+			if notANumber != nil || count != float64(int(count)) || count < 1 {
 				return store.Access{}, fmt.Errorf("limit takes a whole number of rows, not %s", rest[0])
 			}
 			asked.Limit = int(count)
@@ -377,12 +388,35 @@ func keyword(word string) bool {
 // JSON rather than bare words, so that a key of "12" and a key of 12 are
 // different things on the screen as well as in the store — which is exactly
 // the confusion somebody debugging at two in the morning does not need.
+// Numbers are carried as written, not turned into float64 here (ISS-35), for
+// exactly the reason invoke.go's valueFor is: this shell is a courier. It used
+// to unmarshal into `any`, which rounded the digits before they reached the
+// wire — typing `get ids 9007199254740993` sent the daemon 9007199254740992,
+// and the daemon then fetched the document under that key and printed it,
+// which is a row belonging to somebody else. The server's refusal is the
+// authority, and a refusal the shipped shell can never reach is not one.
+//
+// A courier that rewrites the parcel is the bug, not the fix.
 func literal(word string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(word))
+	decoder.UseNumber()
+
 	var value any
-	if err := json.Unmarshal([]byte(word), &value); err != nil {
-		return nil, fmt.Errorf("%s is not a value; write a string in quotes, or a number, true, false or null", word)
+	if err := decoder.Decode(&value); err != nil {
+		return nil, notAValue(word)
+	}
+	// json.Unmarshal refuses trailing bytes and json.Decoder does not, so
+	// without this `limit 1 2` and `get ids 1 2` would quietly read as their
+	// first word. That refusal is not something to lose while fixing a
+	// different silence.
+	if decoder.More() {
+		return nil, notAValue(word)
 	}
 	return value, nil
+}
+
+func notAValue(word string) error {
+	return fmt.Errorf("%s is not a value; write a string in quotes, or a number, true, false or null", word)
 }
 
 func showResult(action string, result store.Result, out io.Writer) {

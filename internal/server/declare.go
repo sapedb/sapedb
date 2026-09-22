@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/sapedb/sapedb/internal/number"
 	"github.com/sapedb/sapedb/internal/store"
 )
 
@@ -76,9 +77,21 @@ func (s *Server) declare(live *session, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// Read without rounding, then checked, for the reason internal/number
+	// gives at length: a constant written into a declaration — `{"value":
+	// 9007199254740993}` — is a number a caller sent, and it was silently
+	// stored as its neighbour exactly as an argument was (ISS-35). It is
+	// worse here than in an invoke, because a declaration is stored once and
+	// then every call that runs it writes the rounded constant again.
+	//
+	// Refused before reach(), so a declaration carrying one never gets as far
+	// as naming a database, let alone taking its write lock.
 	asked := declaring{}
-	if err := json.Unmarshal(payload, &asked); err != nil {
+	if err := unrounded(payload, &asked); err != nil {
 		return nil, fmt.Errorf("sapedb/server: the declaration does not read as one: %w", err)
+	}
+	if err := number.ExactIn(fmt.Sprintf("operation %q", asked.Operation.Name), &asked.Operation); err != nil {
+		return nil, err
 	}
 
 	// Reached exactly as a call reaches a database: being an operator says

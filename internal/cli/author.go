@@ -245,6 +245,32 @@ func seal(draftPath, path string, in io.Reader, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// Read back what is about to be written, before it is written (ISS-35).
+	//
+	// A bundle is not the author's file; it is a re-emission of it. The
+	// declarations go out as marshalled Go values, so every constant in one is
+	// spelled the way a float64 prints — and for a narrow class of integers
+	// that is not the spelling the author wrote. 9223372036854775808 is
+	// accepted (float64 holds 2^63 exactly, and nothing is lost) and comes
+	// back out as 9223372036854776000, which is a DIFFERENT integer and not
+	// one a float64 holds exactly. So the bundle seal wrote would be refused
+	// by the install that read it.
+	//
+	// That refusal is real but it lands in the wrong place: on an operator,
+	// days later, holding a signed artifact they cannot use and a message
+	// about a number they never typed. Sealing is the moment the author is
+	// still looking at the file, so the refusal belongs here.
+	//
+	// It is the same rule and the same reader — bundle.Parse, the function
+	// `verify` and `install` come through — asked about the bytes rather than
+	// about the draft. Nothing is written when it says no, which is the
+	// property this function's own doc already claims about signing.
+	if _, err := bundle.Parse(encoded); err != nil {
+		return fmt.Errorf("%w (a bundle carries its declarations as JSON, and this value cannot be written into one "+
+			"and read back as itself — send it as a string, or use a value a float64 holds exactly)", err)
+	}
+
 	if err := os.WriteFile(path, append(encoded, '\n'), bundleFileMode); err != nil {
 		return err
 	}

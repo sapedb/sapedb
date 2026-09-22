@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/sapedb/sapedb/internal/number"
 	"github.com/sapedb/sapedb/internal/signing"
 	"github.com/sapedb/sapedb/internal/store"
 )
@@ -89,9 +90,24 @@ func (s *Server) explore(live *session, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// Read without rounding and checked, for the same reason a declaration is
+	// (ISS-35). A typed access carries constants in two places — the key a
+	// `get` names, and the values a scan's bounds are built from — and both
+	// are `any`, so both used to arrive already rounded. A `get` on
+	// 9007199254740993 silently fetched the document under 9007199254740992,
+	// which is the worst shape this bug has: the shell answers with a row, and
+	// the row is somebody else's.
+	//
+	// The draft that comes back is the operation this access would have to be
+	// declared as, so an access that rounds also hands the operator a
+	// declaration that rounds, to paste into a schema file. Refusing here is
+	// what stops the bug being copied forward.
 	asked := exploring{}
-	if err := json.Unmarshal(payload, &asked); err != nil {
+	if err := unrounded(payload, &asked); err != nil {
 		return nil, fmt.Errorf("sapedb/server: the access does not read as one: %w", err)
+	}
+	if err := number.ExactIn(fmt.Sprintf("access %q", asked.Access.Kind), &asked.Access); err != nil {
+		return nil, err
 	}
 
 	// Reached exactly as a call reaches a database: being an operator says
