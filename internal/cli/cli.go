@@ -810,7 +810,22 @@ func open(opts options) (*store.Store, func(), error) {
 	}
 	opened.Keep(folder, settings.Key)
 
-	return opened, func() { pages.Close(); held.Close() }, nil
+	// The partitions, then the leader, then the directory lock — the order
+	// internal/server's Close established (390e976), for the reason its comment
+	// at Server.Close gives: a database is not one file. Keep() above is what
+	// lets this store open a file per partition it is asked for, each under an
+	// exclusive lock of its own, and closing pages lets go of the leader only.
+	//
+	// Until this line, opened.Close() was never called anywhere on this side.
+	// ISS-7 filed that as unreachable, on the ground that one command is one
+	// process and the exit gives the locks back. That was wrong by the time it
+	// was written: two open() calls in one process is all it takes, and this
+	// package's own tests are full of them — the second open is refused with
+	// vfs.ErrLocked on a .part file it never opened, and the only thing that
+	// ever released it was a garbage collection happening to run the *os.File
+	// finalizers. See close_test.go, which measures exactly that and nothing
+	// about whether this function was called.
+	return opened, func() { opened.Close(); pages.Close(); held.Close() }, nil
 }
 
 // schema is what an apply file holds.

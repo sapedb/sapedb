@@ -230,6 +230,24 @@ recorded, so its absence is not a claim that nothing changed before it.
   rather than a change to locking. It is recorded here rather than left to be
   found.
 
+- **`sapedb`'s own database closer now gives back the partition files (ISS-7).**
+  `internal/cli`'s `open()` returned a closer that released the leader file and
+  the directory lock and never called `opened.Close()`, so every `.part` file
+  the command had touched stayed under its exclusive lock. This is the same bug,
+  in the same shape, that `390e976` fixed server-side, and the fix follows the
+  order that commit established: partitions, then leader, then directory lock.
+
+  **The ticket called it unreachable, and that was already wrong.** "One command
+  is one process" is a property of `cmd/sapedb`, not of this function: two
+  `open()` calls in one process are all it takes, and the second is refused with
+  `vfs.ErrLocked` on a `.part` file it never opened, until a garbage collection
+  happens to run the finalizers. `internal/cli`'s own tests call `open()`
+  directly and run whole commands back to back against one directory; the only
+  reason none of them had hit it is that none declared a partitioned collection.
+  `internal/cli/close_test.go` does, and on the build before this fix it failed
+  with exactly that error on `entries-2026-09.part`. The severity was
+  understated; the fix is the one line the ticket predicted.
+
 - **Every read in `examples/ledger` now declares a `projection` (ISS-19).** The
   worked example had three reads — `orders.get`, `payments.of_order`,
   `entries.of_account` — and none of them named a field, so `sapedb-types`
