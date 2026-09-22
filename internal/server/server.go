@@ -848,10 +848,18 @@ func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
 	}
 	// Asked of the operation that was looked up, not of the request: a caller
 	// names an operation, and whether that operation writes is something only
-	// the declaration knows. store.Writes is the same list SharedRead just
-	// used to answer the lock question, so there is one answer to "does this
-	// write", not two that can drift. A read is not refused here, because a
-	// read records nothing — see follower.go.
+	// the declaration knows. A read is not refused here, because a read records
+	// nothing — see follower.go.
+	//
+	// store.Writes answers for the ACTION, which is not the same question
+	// SharedRead just answered and no longer gives the same answer for every
+	// operation. A batch that only reads shares the database above and is
+	// refused here, because ActionBatch is a write in that list. That is the
+	// safe direction and it is the one this build takes on purpose: letting a
+	// read-only composed operation through on a follower is a change to what a
+	// follower serves, and the ticket this came from (ISS-9) is about which
+	// lock a leader takes. It is written down in the CHANGELOG as debt rather
+	// than left for somebody to find.
 	if store.Writes(operation.Action) {
 		if err := s.readOnly(fmt.Sprintf("%q is declared to %s", operation.Name, operation.Action)); err != nil {
 			db.mutex.RUnlock()

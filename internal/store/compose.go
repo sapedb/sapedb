@@ -203,6 +203,184 @@ func ceilingOf(operation Operation, within *costs, among Operations) (int, error
 	return 0, fmt.Errorf("%w: %q is not something an operation can do", ErrDeclaration, operation.Action)
 }
 
+// sharing is one call's walk over the reference graph, the same shape costs is
+// for ceilingOf and for the same two reasons: known makes a diamond cost one
+// visit per edge rather than one per path, and visiting refuses a store whose
+// operation records have been damaged or hand-edited into a cycle rather than
+// walking it until the stack runs out.
+type sharing struct {
+	known    map[string]bool
+	visiting map[string]bool
+}
+
+func newSharing() *sharing {
+	return &sharing{known: map[string]bool{}, visiting: map[string]bool{}}
+}
+
+// shareable says whether an operation can run while other readers run: it
+// changes nothing, and no collection it reaches is partitioned.
+//
+// This is the second walk over the same graph ceilingOf walks, and it is here
+// next to that one so the shape they share is visible rather than rediscovered.
+// What it answers is SharedRead's question, and before this a batch could not
+// be asked it at all: composition is spelled `action: batch`, batch is in
+// Writes(), and so a composed operation of three scans — a pure read — dropped
+// the read lock and serialised against every other call on the database.
+//
+// # Per call, not stored at declare time
+//
+// The obvious alternative is to derive this when the operation is declared —
+// validateOperation's ActionBatch branch already walks the steps — and keep the
+// answer in the declaration. The case that looks like it decides between the
+// two is a batch that was read-only when it was declared and calls an operation
+// that becomes a write. It does not decide it, and the reason is N1: a step
+// pins a version, DeclareOperation only ever hands out latest+1 and never
+// writes over a version that exists, so the declaration a step names is the
+// exact one it was validated against, for as long as both are stored.
+// Redeclaring the callee as a write makes a NEW version; a@1 still names b@1,
+// still only reads, and runComposedStep still runs b@1. Stored and derived give
+// the same answer there, so that case settles nothing and the decision is made
+// on the two things that differ:
+//
+//   - A stored answer is a field on Operation, which is the wire shape and the
+//     dump shape. It would be the third field the store has to assign itself
+//     and discard from whatever arrived — after Version and DeclaredBy — and
+//     the cost of getting that wrong is not a wrong audit record: a client that
+//     could write "this one only reads" onto a batch that writes would be
+//     handing itself the read lock for a write, with several of them inside the
+//     database at once. Derived, there is nothing to send and nothing to lie in.
+//   - Every operation declared before such a field existed would be stored
+//     without it, and absent would have to mean "assume it writes" — so the
+//     pessimism this fixes would survive untouched on exactly the declarations
+//     that have it today, until somebody redeclared them. The way out is to
+//     compute it when an old declaration is read, which is this walk; and then
+//     there are two answers to one question, which is the objection Writes()
+//     and ceilingOf each already make in their own godoc.
+//
+// What it costs per call is nothing for an operation that is not a batch, and
+// nothing for a batch of plain steps: a step that touches a collection carries
+// its own action and collection, so no lookup is needed. Only a composed step
+// costs a lookup of its callee, which is the same tree read runComposedStep is
+// about to make anyway.
+//
+// # The partition rule applies to every leg
+//
+// SharedRead refuses to share a read of a partitioned collection because even a
+// get there goes through Collection.into, which opens the partition file if it
+// is not open yet and then runs expiry, which drops files — a writer wearing a
+// reader's name. That check used to look at the one collection the operation
+// names. A batch touches the collections its STEPS name, so this asks it of
+// each of them, at every depth. Without that, making batches shareable would
+// have handed the read lock to exactly the thing that check exists to keep out.
+//
+// The batch's own Collection is deliberately not checked. runInline looks it up
+// for every action and the batch branch never uses it, so a batch reaches no
+// partition through the name written on itself — refusing on it would be
+// pessimism about a field nothing reads.
+//
+// # What a shared batch brings under the read lock with it
+//
+// One consequence worth writing down rather than discovering: runBatch installs
+// a deferred recover that calls s.Rollback() so a panic partway through a step
+// does not leave s.pages.Pending() true forever. A read-only batch that runs
+// shared brings that with it, so on a panic that recover would touch the pager
+// while other readers are inside the database. It is bounded by the fact that
+// the panic is re-panicked unchanged and the server's guard dies on it, which
+// is the same reason runBatch's own godoc gives for the gap being harmless
+// there — and the steps themselves are the same reads that already ran under
+// this lock before a batch could.
+func (s *Store) shareable(operation Operation, within *sharing) (bool, error) {
+	if operation.Action != ActionBatch {
+		// The order of these two is the order SharedRead has always had: a
+		// write is refused without the collection being looked up at all, so a
+		// declaration naming a collection that is no longer there answers the
+		// lock question the way it always did rather than turning into an error
+		// one layer earlier than it used to be.
+		if Writes(operation.Action) {
+			return false, nil
+		}
+		collection, err := s.Collection(operation.Collection)
+		if err != nil {
+			return false, err
+		}
+		return collection.spec.Partition == nil, nil
+	}
+
+	at := fmt.Sprintf("%s@%d", operation.Name, operation.Version)
+	if answer, done := within.known[at]; done {
+		return answer, nil
+	}
+	if within.visiting[at] {
+		return false, fmt.Errorf("%w: %q refers to itself, which a pinned version cannot be declared to do — this store's operation records disagree with the rule that wrote them",
+			ErrDamaged, at)
+	}
+	within.visiting[at] = true
+	defer delete(within.visiting, at)
+
+	answer, err := s.stepsShare(operation, within)
+	if err != nil {
+		return false, err
+	}
+	// Memoised only for a stored declaration. Version 0 is the draft Explore
+	// builds and never stores, and two different drafts share that key.
+	if operation.Version > 0 {
+		within.known[at] = answer
+	}
+	return answer, nil
+}
+
+// stepsShare is the step loop of shareable, separated so that both answers are
+// memoised by the one caller rather than only the true one.
+func (s *Store) stepsShare(operation Operation, within *sharing) (bool, error) {
+	for i := range operation.Steps {
+		step := &operation.Steps[i]
+
+		if step.Operation == "" {
+			// Named one at a time rather than asked of Writes(): Writes()
+			// answers for an operation's action, and a step's actions are a
+			// smaller list that validateStep enumerates. A step action added
+			// later lands in the default and is not shared until somebody has
+			// decided it may be, which is the direction a lock decision is
+			// allowed to be wrong in.
+			switch step.Action {
+			case ActionGet:
+			default:
+				return false, nil
+			}
+			collection, err := s.Collection(step.Collection)
+			if err != nil {
+				return false, err
+			}
+			if collection.spec.Partition != nil {
+				return false, nil
+			}
+			continue
+		}
+
+		callee, found, err := s.Operation(step.Operation, step.Version)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			// Not an error here. A step pinning a version that is not stored
+			// is refused by runComposedStep, with the name, the version and
+			// the step it is in; answering "not shared" leaves that refusal
+			// where it already reads well and keeps this function to the one
+			// question it is for.
+			return false, nil
+		}
+		reads, err := s.shareable(callee, within)
+		if err != nil {
+			return false, err
+		}
+		if !reads {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
 // keyTypeOf is the declared type of the key an operation leaves in Result.Key,
 // or the empty string when it leaves none.
 //

@@ -13,13 +13,15 @@ import (
 // TestEveryIndexedFieldListReadIsOnTheList is the structural half of task
 // 0054 — the case table above (lockstep_test.go) only proves the lockstep
 // property holds at the sites that exist TODAY. It says nothing about a
-// NINETEENTH place that starts indexing into Fields/Terms/Group next
-// month (the list below has exactly 18 entries — Reviewer 0054 measured
+// TWENTIETH place that starts indexing into Fields/Terms/Group next
+// month (the list below has exactly 19 entries — Reviewer 0054 measured
 // that an earlier draft of this comment said "twelfth"/"thirteenth" here,
 // which was simply wrong arithmetic against the list's own length, not a
 // claim about the code; SAPE-8 added the eighteenth, store.envelopeOf,
 // which SAPE-12 renamed to store.EnvelopeOf and store.ceiling to
-// store.ceilingOf — a rename, not a nineteenth entry).
+// store.ceilingOf — a rename, not a nineteenth entry; ISS-9 added the real
+// nineteenth, store.stepsShare, which walks the same Steps list ceilingOf
+// walks and asks a different question of it).
 //
 // This greps every non-test .go source file in internal/store and
 // internal/keys for an expression that reads a named element out of one of
@@ -27,7 +29,7 @@ import (
 // Steps, Indexes, Rollups) by a loop-shaped index name (i, at, spread, idx),
 // records which function each match falls inside, and requires that set of
 // functions to equal EXACTLY the list below — no fewer, no more. A
-// EIGHTEENTH reader appearing without a matching line added here fails
+// TWENTIETH reader appearing without a matching line added here fails
 // this test; a reader disappearing (say, because a function was deleted)
 // also fails it, so the list cannot go stale in either direction without
 // someone noticing.
@@ -81,6 +83,7 @@ var knownIndexedListReaders = map[string]string{
 	"store.ceilingOf":         "adds up the ceilings of a composed operation's steps, reaching each step's own address by index: &operation.Steps[i] — was the method store.ceiling until SAPE-12 handed it its operation lookup as an argument so a bundle could be walked without a store",
 	"store.EnvelopeOf":        "walks a batch's own Steps by index to reach each step's collection or callee when building its cost envelope (SAPE-8) — exported and given its lookup as an argument by SAPE-12, so the same walk reads a bundle nobody has installed",
 	"store.runSteps":          "reaches each batch step's own address by index: &operation.Steps[i] — was runBatch's own loop until a step could call an operation and the loop had to be reachable without runBatch's guards",
+	"store.stepsShare":        "reaches each batch step's own address by index: &operation.Steps[i], to ask whether that step writes or touches a partition — the lock half of ceilingOf's walk (ISS-9), split out of shareable so both answers are memoised by one caller",
 	"store.sameRollup":        "compares two rollups' Group and Sum element by element, by index",
 	"store.sameShape":         "compares two indexes' Fields and Include element by element, by index",
 	"store.scanAcross":        "the mutant this task's debt names directly: Terms[i]/Fields[i].Path per field of a partitioned index",
@@ -168,7 +171,7 @@ func TestEveryIndexedFieldListReadIsOnTheList(t *testing.T) {
 	}
 	for name, sites := range found {
 		if _, ok := knownIndexedListReaders[name]; !ok {
-			t.Errorf("%s reads a list by index at %v and is NOT on the known list — a new reader of Fields/Terms/Group/etc, or a rename of one already there; add it with a reason, after checking it does what the other 17 do", name, sites)
+			t.Errorf("%s reads a list by index at %v and is NOT on the known list — a new reader of Fields/Terms/Group/etc, or a rename of one already there; add it with a reason, after checking it does what the other 18 do", name, sites)
 		}
 	}
 }

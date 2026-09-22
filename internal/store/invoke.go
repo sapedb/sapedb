@@ -351,10 +351,19 @@ func writes(action string) bool { return Writes(action) }
 //
 // It is exported so that a caller deciding whether to let an operation run at
 // all — a server holding a follower, which may not write — asks the same
-// question, of the same list, that SharedRead asks when it decides between the
-// read lock and the write lock. A second list kept somewhere else is a list
-// that will one day disagree with this one, and the day it does, the caller
-// that trusted it lets a write through.
+// question, of the same list, that shareable (compose.go) asks of an action
+// when it decides between the read lock and the write lock. A second list kept
+// somewhere else is a list that will one day disagree with this one, and the
+// day it does, the caller that trusted it lets a write through.
+//
+// It answers for an ACTION, so ActionBatch is a write here whatever its steps
+// do. That is the right answer to the question this function is: a batch is
+// where a write id means something, and it is the action a follower refuses.
+// shareable asks a narrower question — can this operation run beside other
+// readers — and a read-only batch answers yes to that and still comes back
+// true from here. The consequence is deliberate and is named in the CHANGELOG:
+// a read-only composed operation now shares the database on a leader, and is
+// still refused on a follower.
 func Writes(action string) bool {
 	switch action {
 	case ActionInsert, ActionPut, ActionUpdate, ActionDelete, ActionBatch, ActionDeleteRange:
@@ -547,13 +556,20 @@ func rowOf(row Totals) map[string]any {
 // SharedRead is the operation a call names, and whether it can run while
 // other readers run.
 //
-// Two things have to hold for it to be shared. The action must not change
-// anything — that is what writes() already decides. And the collection must
-// not be partitioned: for a partitioned collection even a get goes through
-// Collection.into, which opens the partition file if it is not open yet
-// (mutating the open set, and creating the file when it is new) and then runs
-// expiry, which drops files. A "read" there is a writer wearing a reader's
-// name.
+// Two things have to hold for it to be shared. It must not change anything.
+// And no collection it reaches must be partitioned: for a partitioned
+// collection even a get goes through Collection.into, which opens the partition
+// file if it is not open yet (mutating the open set, and creating the file when
+// it is new) and then runs expiry, which drops files. A "read" there is a
+// writer wearing a reader's name.
+//
+// Both of those used to be asked of the operation alone — writes() of its
+// action, and Partition of the one collection it names — and that made every
+// composed operation a write, because composition is spelled `action: batch`.
+// A batch of three scans is a pure read and it took the database to itself.
+// shareable (compose.go) asks both questions of the steps instead, at every
+// depth, and its godoc has why the answer is worked out here rather than stored
+// in the declaration.
 //
 // The operation comes back so that a caller which decided to share does not
 // have to look it up a second time: the lookup is itself a read of the tree,
@@ -566,14 +582,11 @@ func (s *Store) SharedRead(caller Caller, name string, version int) (Operation, 
 	if err := allowed(caller, operation); err != nil {
 		return Operation{}, false, err
 	}
-	if writes(operation.Action) {
-		return operation, false, nil
-	}
-	collection, err := s.Collection(operation.Collection)
+	shared, err := s.shareable(operation, newSharing())
 	if err != nil {
 		return Operation{}, false, err
 	}
-	return operation, collection.spec.Partition == nil, nil
+	return operation, shared, nil
 }
 
 // Run performs an operation SharedRead already found and allowed.

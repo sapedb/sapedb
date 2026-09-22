@@ -183,6 +183,53 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Fixed
 
+- **A composed operation that only reads now shares the database instead of
+  taking it to itself (ISS-9).** SAPE-18 let reads of one database run beside
+  each other. No composed operation could benefit, whatever it did, because
+  composition is spelled `action: batch` and `batch` is a write in
+  `store.Writes` — `SharedRead` answered "not shared" before it looked at a
+  single step. So a batch of three scans, which is the headline SAPE-20 sells,
+  performed as a pure read and executed like a write: it dropped the read lock,
+  took `db.mutex.Lock()`, and serialised against every other call on that
+  database.
+
+  **What decides it now** is a walk over the steps, at every depth, asking the
+  two questions `SharedRead` always asked of the operation alone: does anything
+  it reaches change the database, and is any collection it reaches partitioned.
+  A batch is shareable only if every step is a `get`, or calls an operation that
+  is itself shareable. `deleteRange` — which did not exist when the ticket was
+  written — is a write, so a batch that calls one is not shareable; `hashRange`
+  is a read and shares.
+
+  **Measured, not asserted.** `internal/server`'s
+  `TestAComposedReadSharesTheDatabase` counts how many reads are inside one
+  database at once while four connections run a composed operation of three
+  scans over four thousand documents, the same way SAPE-18's own gate does. An
+  exclusive lock cannot reach two on any number of cores. The observed
+  high-water mark is four. Nothing is timed.
+
+  **The answer is worked out per call rather than stored in the declaration**,
+  and `shareable`'s godoc in `internal/store/compose.go` has the argument. The
+  short version: a step pins a version and `DeclareOperation` never writes over
+  one, so redeclaring a callee as a write makes a *new* version the batch does
+  not call — the case that looks like it decides between the two placements
+  gives the same answer either way. What differs is that a stored answer would
+  be a field on the wire and in dumps that the store must assign and discard
+  from callers (a client that could write "this one only reads" onto a batch
+  that writes would be handing itself the read lock), and that every operation
+  declared before such a field existed would keep the old pessimism until
+  somebody redeclared it.
+
+  **Nothing about the wire, the protocol or the conformance fixtures changes.**
+  This is which lock a leader takes. The same call, the same arguments, the same
+  answer.
+
+  **Known and deliberate:** a read-only composed operation is still refused on a
+  follower. The follower check asks `store.Writes` of the *action*, where
+  `batch` is a write, and loosening it is a change to what a follower serves
+  rather than a change to locking. It is recorded here rather than left to be
+  found.
+
 - **Every read in `examples/ledger` now declares a `projection` (ISS-19).** The
   worked example had three reads — `orders.get`, `payments.of_order`,
   `entries.of_account` — and none of them named a field, so `sapedb-types`
