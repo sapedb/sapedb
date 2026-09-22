@@ -7,6 +7,62 @@ recorded, so its absence is not a claim that nothing changed before it.
 
 ### Changed
 
+- **A number that `number` cannot store is now refused instead of silently
+  stored as a different number, and this is a breaking change in both
+  directions (ISS-35).** `number` is a `float64`. Measured against a real
+  daemon before this change — four values sent with `sapedb invoke`, read back
+  out of the file with `sapedb dump`:
+
+  | sent | stored | |
+  | --- | --- | --- |
+  | `9007199254740992` | `9007199254740992` | exact |
+  | `9007199254740993` | `9007199254740992` | **changed** |
+  | `9223372036854775807` | `9223372036854776000` | **changed** |
+  | `1234567890123456789` | `1234567890123456800` | **changed** |
+
+  All four answered `changed 1` and exit 0. There was no refusal, no warning,
+  and nothing in the log. The second row is the clearest: off by one, silently.
+
+  **What now fails that used to work.** A JSON number written as a plain
+  integer — an optional `-`, then digits, no `.` and no exponent — that a
+  `float64` does not hold exactly is refused. A caller storing a Snowflake id,
+  an account number or a nanosecond timestamp above 2^53 **will start getting
+  errors where it used to get `changed 1`**. That is the point, and it is not a
+  small change: those writes were succeeding, and applications may be relying
+  on them succeeding. They were, however, writing a different number than they
+  sent, and they had no way of finding out.
+
+  **What now works that used to silently corrupt.** The same write comes back
+  as a refusal naming the value and what would otherwise have been stored,
+  under its own wire code, `precision` — not `failed`, which is the shape
+  ISS-21 already cost this project once, and not `argument`, because there is
+  nothing about the call to correct beyond the one value.
+
+  **The boundary is exact representability, not magnitude.** `9007199254740992`
+  (2^53), `9007199254740994` (2^53+2) and `9223372036854775808` (2^63) are all
+  accepted; `9007199254740993` and `9223372036854775807` are not. A rule that
+  refused every integer above 2^53 would refuse three working values to catch
+  two broken ones. Negatives, zero, and every decimal fraction — `0.1`,
+  `1.5e300` — are accepted exactly as before; a literal with a point or an
+  exponent is not checked at all, so `9.007199254740993e15` is accepted while
+  `9007199254740993` is refused. That hole is deliberate and pinned by a test:
+  see `COMPATIBILITY.md` §3 and `internal/server/number.go`.
+
+  **It had to be now.** `COMPATIBILITY.md` §3 lets a 1.x loosen a rule and
+  forbids it from tightening one. Refusing a write that succeeds today is a
+  tightening, so it could only arrive before the tag; after it, never. Carrying
+  integers exactly (SAPE-30) is a loosening and may arrive in any later 1.x.
+  Building the refusal now forecloses nothing; not building it would have made
+  silent rounding a promise this project has to keep.
+
+  **`sapedb invoke` stopped rounding its arguments too.** It unmarshalled a
+  declared `number` into a `float64` before sending it, so typing
+  `n=9007199254740993` handed the daemon `9007199254740992` — which the daemon
+  then accepted, correctly, having been told nothing else. The digits now reach
+  the wire as typed and the server decides. A declared `number` argument is
+  carried as a `json.Number` inside the CLI; it marshals to the same JSON it
+  always did.
+
 - **An operation name is now `namespace:name`, and this is a breaking change to
   what a name means (SAPE-9).** It had to land before 1.0.0 or never: every
   separator is a legal operation name today — `internal/store`'s

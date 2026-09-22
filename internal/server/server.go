@@ -14,6 +14,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -779,9 +780,25 @@ type grant struct {
 }
 
 func (s *Server) invoke(live *session, payload []byte) ([]byte, error) {
+	// Decoded with UseNumber rather than json.Unmarshal, which is the whole
+	// of ISS-35's fix and the reason it is here and not somewhere tidier: a
+	// JSON number turns into a float64 at this line, and after it the digits
+	// the caller wrote no longer exist to be checked. number.go says the rest.
+	//
+	// json.Decoder is one value and then whatever follows, where Unmarshal
+	// refuses trailing bytes — so the trailing check below keeps this line
+	// meaning exactly what it meant before, minus the rounding.
 	asked := call{}
-	if err := json.Unmarshal(payload, &asked); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&asked); err != nil {
 		return nil, fmt.Errorf("sapedb/server: the call does not read as one: %w", err)
+	}
+	if decoder.More() {
+		return nil, fmt.Errorf("sapedb/server: the call does not read as one: it holds more than one value")
+	}
+	if err := exactArguments(asked.Arguments); err != nil {
+		return nil, err
 	}
 
 	db, err := s.reach(live, asked)
@@ -1240,6 +1257,18 @@ func codeFor(err error) string {
 		{store.ErrArgument, "argument"},
 		{store.ErrNotAllowed, "not_allowed"},
 		{ErrNotOperator, "not_operator"},
+
+		// ISS-35. A number that float64 would store as a different number is
+		// refused under a code of its own, not as "argument" and not as
+		// "failed". Not "argument", because the argument is the declared type
+		// and is present and is a number — there is nothing about the call to
+		// correct, only the one value to send another way. Not "failed",
+		// because that is the ISS-21 shape: a client switching on the code
+		// would see a generic breakage where what it has is a precise,
+		// actionable and permanent condition, and retrying will never change
+		// it.
+		{ErrPrecision, "precision"},
+
 		{ErrGrant, "grant"},
 		{ErrGrantExpired, "grant_expired"},
 		{store.ErrExists, "exists"},

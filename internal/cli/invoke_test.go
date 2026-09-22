@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,13 +94,21 @@ func TestAnInvokeIsTheCallTheDeclarationDescribes(t *testing.T) {
 			"books.tidy",
 			map[string]any{"id": "bk-1"},
 		},
-		// The three coerced types, and "any" as JSON. float64 and bool, not
+		// The three coerced types, and "any" as JSON. A number and a bool, not
 		// the strings "2" and "false".
+		//
+		// The number is a json.Number rather than a float64 since ISS-35, and
+		// the claim this row makes is unchanged by that: it marshals to the
+		// JSON number 2, exactly as the float64 did, and the point here has
+		// always been that it is not the JSON string "2". What changed is that
+		// the digits are no longer rounded on their way out of this command,
+		// which is what lets the server refuse a value it cannot store —
+		// number_test.go asserts that on the wire rather than on the type.
 		{
 			`invoke library:books.shelve id=bk-9 copies=2 on_loan=false note={"by":"ada"}`,
 			"library:books.shelve",
 			map[string]any{
-				"id": "bk-9", "copies": 2.0, "on_loan": false,
+				"id": "bk-9", "copies": json.Number("2"), "on_loan": false,
 				"note": map[string]any{"by": "ada"},
 			},
 		},
@@ -114,7 +123,7 @@ func TestAnInvokeIsTheCallTheDeclarationDescribes(t *testing.T) {
 		{
 			`invoke library:books.shelve on_loan=true copies=0 note=null id=bk-2`,
 			"library:books.shelve",
-			map[string]any{"id": "bk-2", "copies": 0.0, "on_loan": true, "note": nil},
+			map[string]any{"id": "bk-2", "copies": json.Number("0"), "on_loan": true, "note": nil},
 		},
 		// A value may hold the separators: the name ends at the FIRST "=",
 		// and a colon in a value is just a character.

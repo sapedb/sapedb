@@ -250,11 +250,33 @@ func valueFor(parameter store.Parameter, written string) (any, error) {
 		return written, nil
 
 	case store.TypeNumber:
-		var value float64
-		if err := json.Unmarshal([]byte(written), &value); err != nil {
+		// Carried as written, not turned into a float64 here (ISS-35).
+		//
+		// This used to unmarshal into a float64, and that rounded the value
+		// before it ever reached the wire: typing n=9007199254740993 handed
+		// the daemon 9007199254740992, which the daemon then quite correctly
+		// accepted, because by then it was told nothing else. The server's
+		// refusal is the authority — this file's own opening comment says so
+		// — and a refusal the shipped tool can never reach is not one. So the
+		// digits go out as the operator typed them and the far side decides.
+		//
+		// A courier that rewrites the parcel is the bug, not the fix.
+		value, err := carried(written)
+		if err != nil {
 			return nil, notOne()
 		}
-		return value, nil
+		switch value.(type) {
+		case json.Number:
+			return value, nil
+		case nil:
+			// `null` unmarshalled into a float64 left that float64 at its
+			// zero value, so zero is what this branch has always sent for it.
+			// Unchanged on purpose: ISS-35 is about numbers that are quietly
+			// rounded, and widening this one would be a second change hiding
+			// inside the first.
+			return float64(0), nil
+		}
+		return nil, notOne()
 
 	case store.TypeBool:
 		var value bool
@@ -266,8 +288,13 @@ func valueFor(parameter store.Parameter, written string) (any, error) {
 	case store.TypeAny:
 		// The one type where the operator does have to say: "any" is exactly
 		// the declaration that did not.
-		var value any
-		if err := json.Unmarshal([]byte(written), &value); err != nil {
+		//
+		// Read with the same courier rule as a declared number, and for the
+		// stronger version of the same reason: an "any" argument is usually a
+		// whole document, so the numbers at risk here are nested ones nobody
+		// is looking at while they type.
+		value, err := carried(written)
+		if err != nil {
 			return nil, fmt.Errorf("%s is declared any, so its value is written as JSON, and %s is not: a string goes in quotes",
 				quoted(parameter.Name), quoted(written))
 		}
@@ -279,6 +306,31 @@ func valueFor(parameter store.Parameter, written string) (any, error) {
 	// anyway, because the alternative is a silent nil going out as a value.
 	return nil, fmt.Errorf("%s is declared %s, which this shell does not know how to write",
 		quoted(parameter.Name), quoted(parameter.Type))
+}
+
+// carried reads one written JSON value without turning its numbers into
+// float64s, so that what goes on the wire is what was typed (ISS-35).
+//
+// Every number in the result — top level or nested — is a json.Number, which
+// encoding/json writes back out as the digits it was given. The server decodes
+// the same way and is the one that decides whether a value it cannot store is
+// refused; see internal/server/number.go.
+//
+// It keeps json.Unmarshal's refusal of trailing bytes, which json.Decoder does
+// not have on its own: `n=1 2` was two things and one of them was being
+// dropped, and that is not something to lose while fixing a different silence.
+func carried(written string) (any, error) {
+	decoder := json.NewDecoder(strings.NewReader(written))
+	decoder.UseNumber()
+
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if decoder.More() {
+		return nil, fmt.Errorf("%s is more than one value", quoted(written))
+	}
+	return value, nil
 }
 
 // takes is the arguments a declaration names, as they would be typed.

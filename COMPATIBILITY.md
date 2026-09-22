@@ -74,6 +74,33 @@ rule so that a declaration valid in 1.0 is refused in 1.1, or change what a `lim
 Loosening a rule is allowed; tightening one is not, because the declaration is already in the
 database.
 
+#### What `number` means, and what it refuses (ISS-35)
+
+`number` is an IEEE-754 double, and 1.0.0 freezes that. Every integer up to 2<sup>53</sup> is
+carried exactly; above it, the integers a double holds exactly thin out but do not stop —
+9007199254740994 and 9223372036854775808 are both exact, 9007199254740993 and
+9223372036854775807 are not.
+
+**A JSON number written as a plain integer** — an optional `-`, then digits, with no `.` and
+no exponent — **must be a value a double holds exactly, or it is refused.** The refusal names
+the value and what would otherwise have been stored, and reaches a client under its own code,
+`precision`. Before this, such a value was stored as a *different number* with no refusal, no
+warning and nothing in the log.
+
+Every other number is accepted exactly as before, and this asymmetry is deliberate. `0.1` is
+not a double either, and neither is `1.5e300`; refusing them would refuse almost every caller
+this database has, to fix a loss nobody reported. A literal carrying an exponent or a decimal
+point is the caller saying they are thinking in floats, and they are given floats. The cost is
+that `9.007199254740993e15` is *not* refused although `9007199254740993` is — the same value,
+written two ways. That is a known hole, pinned by a test, not an oversight.
+
+**This is the one direction this rule can ever move.** Refusing a value that used to be
+accepted is a tightening, which section 3 permits before the tag and forbids after it, so it
+had to land in 1.0.0 or never. Carrying integers exactly (SAPE-30) is a *loosening* and may
+arrive in any later 1.x; when it does, this refusal stops being reachable for the values that
+gain an exact representation and stays as the safety net for those that do not. Nothing about
+a `number` that already round-trips moves in either case.
+
 ### 4. The public API
 
 | | |

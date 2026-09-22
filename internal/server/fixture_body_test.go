@@ -176,7 +176,7 @@ func TestFixtureRequestBodiesMatchTheStructsTheyDescribe(t *testing.T) {
 	artifact := loadRequestBodiesArtifact(t)
 
 	if artifact.UnknownFieldPolicy != "ignore" {
-		t.Errorf(`requestBodies.unknownFieldPolicy = %q, want "ignore" -- measured fact: every request decode in this package uses plain json.Unmarshal, none call DisallowUnknownFields`, artifact.UnknownFieldPolicy)
+		t.Errorf(`requestBodies.unknownFieldPolicy = %q, want "ignore" -- measured fact: every request decode in this package uses json.Unmarshal or a json.Decoder on the same defaults for field names (invoke calls UseNumber, for ISS-35, which reads numbers differently and field names identically), none call DisallowUnknownFields`, artifact.UnknownFieldPolicy)
 	}
 
 	// Every request frame a client sends whose payload is JSON this package
