@@ -38,6 +38,9 @@ type Store struct {
 	now         func() time.Time
 	// retain is how many log entries to keep; zero keeps all of them.
 	retain int
+	// budget is the most bytes of rows one call may build; zero is no bound
+	// at all. See budget.go and Budget below.
+	budget int
 
 	// files, parts, dropped and key are partitions: where other files come
 	// from, the ones open now, the ones this transaction dropped, and the key
@@ -71,6 +74,22 @@ func Open(pages *pager.Pager) (*Store, error) {
 // Identifiers lets a caller — a test, mostly — decide where generated primary
 // keys come from.
 func (s *Store) Identifiers(source *ulid.Source) { s.ids = source }
+
+// Budget bounds how many bytes of rows one call may build before it is
+// refused.
+//
+// Zero, the default, is no bound. A Go caller embedding this store is not
+// sending its answer through anything, and a limit borrowed from a wire it is
+// not on would refuse reads that work today. The server sets this to the
+// frame cap when it opens a file, because that is the size an answer over the
+// wire actually has to fit into — see internal/server's openFile, and ISS-37
+// for why the cap being enforced at the far end of the work was not the same
+// thing as the work being bounded.
+//
+// Chosen while the file is being opened, before any other goroutine can see
+// the store, which is why it is a plain field with no lock — the same reason
+// Identifiers above is one.
+func (s *Store) Budget(bytes int) { s.budget = bytes }
 
 // Commit makes everything written since the last one durable.
 //

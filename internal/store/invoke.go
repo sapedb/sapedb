@@ -62,7 +62,15 @@ func (s *Store) perform(caller Caller, operation Operation, arguments map[string
 		}
 	}
 
-	if err := s.runInline(by, operation, values, &result); err != nil {
+	// One budget for the whole call, made here because here is where a call
+	// begins. A batch that calls three operations spends one budget between
+	// them rather than three of its own, for the same reason hashRange keeps
+	// one row counter for a walk that crosses several partition files: a
+	// counter per underlying call bounds each piece and bounds nothing about
+	// the answer, which is what a caller actually receives.
+	room := &budget{most: s.budget}
+
+	if err := s.runInline(by, operation, values, &result, room); err != nil {
 		return Result{}, err
 	}
 
@@ -90,7 +98,7 @@ func (s *Store) perform(caller Caller, operation Operation, arguments map[string
 // operation has none of those — its arguments come from a declaration, the
 // write id covers the whole transaction rather than each part of it, and there
 // is one transaction, which is not its to end.
-func (s *Store) runInline(by Attribution, operation Operation, values map[string]any, result *Result) error {
+func (s *Store) runInline(by Attribution, operation Operation, values map[string]any, result *Result, room *budget) error {
 	collection, err := s.Collection(operation.Collection)
 	if err != nil {
 		return err
@@ -98,7 +106,7 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 
 	switch operation.Action {
 	case ActionBatch:
-		if err := s.runBatch(by, operation, values, result); err != nil {
+		if err := s.runBatch(by, operation, values, result, room); err != nil {
 			return err
 		}
 
@@ -112,7 +120,17 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 			return err
 		}
 		if found {
-			result.Rows = []map[string]any{project(document, operation.Projection)}
+			// Charged like every other row. One document cannot grow with a
+			// collection, so this is not where ISS-37's wall is — but there
+			// is no maximum size for a single stored value (SAPE-31), so a
+			// get is not free of the question either, and a budget that
+			// covered every read except the cheapest one would be a budget
+			// somebody has to remember the exception to.
+			row := project(document, operation.Projection)
+			if err := room.spend(operation.Name, row); err != nil {
+				return err
+			}
+			result.Rows = []map[string]any{row}
 			result.Count = 1
 		}
 
@@ -121,17 +139,30 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 		if err != nil {
 			return err
 		}
+		// refused carries the budget's reason out of the callback, which can
+		// only say "stop" — the same shape hashRange uses, and for the same
+		// reason: a refusal that returned nothing else would come back as a
+		// short answer that looks complete.
+		var refused error
 		err = collection.Totals(operation.Rollup, within, func(row Totals) bool {
 			if len(result.Rows) >= operation.Limit {
 				result.Truncated = true
 				return false
 			}
-			result.Rows = append(result.Rows, rowOf(row))
+			flat := rowOf(row)
+			if err := room.spend(operation.Name, flat); err != nil {
+				refused = err
+				return false
+			}
+			result.Rows = append(result.Rows, flat)
 			result.Count = len(result.Rows)
 			return true
 		})
 		if err != nil {
 			return err
+		}
+		if refused != nil {
+			return refused
 		}
 
 	case ActionScan, ActionCount:
@@ -139,7 +170,7 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 		if err != nil {
 			return err
 		}
-		if err := s.run(collection, operation, within, result); err != nil {
+		if err := s.run(collection, operation, within, result, room); err != nil {
 			return err
 		}
 
@@ -240,10 +271,28 @@ func (s *Store) runInline(by Attribution, operation Operation, values map[string
 }
 
 // run walks the declared stretch of the declared index, stopping at the
-// declared limit and saying so.
-func (s *Store) run(collection *Collection, operation Operation, within Range, result *Result) error {
+// declared limit and saying so — or refusing, when the rows it has built
+// already fill the budget the server holds itself to.
+//
+// This is the path ISS-37 measured. A declaration asking for forty-five
+// thousand rows is legal, the walk was happy to honour it, and the only thing
+// between that and a frame was a cap checked on the finished byte slice. The
+// budget below is spent one row at a time, so the answer is refused before it
+// is built rather than after — which is the whole of what the ticket asks for
+// and is not streaming, which the ticket says is a larger decision and not a
+// prerequisite.
+func (s *Store) run(collection *Collection, operation Operation, within Range, result *Result, room *budget) error {
 	limit := operation.Limit
 	counting := operation.Action == ActionCount
+
+	// refused carries the budget's reason out of the callback, the same way
+	// hashRange's does: a visitor can only say "stop", and a stop with no
+	// reason would hand back a short answer indistinguishable from a whole
+	// one. A scan has Truncated to say "there was more", and this must not be
+	// reported as that — Truncated means the DECLARATION's limit was reached
+	// and the caller may page on from here, and this means the answer as
+	// declared has no shape that fits.
+	var refused error
 
 	visit := func(key any, document map[string]any) bool {
 		if counting {
@@ -263,24 +312,35 @@ func (s *Store) run(collection *Collection, operation Operation, within Range, r
 			result.Truncated = true
 			return false
 		}
-		result.Rows = append(result.Rows, project(document, operation.Projection))
+		row := project(document, operation.Projection)
+		if err := room.spend(operation.Name, row); err != nil {
+			refused = err
+			return false
+		}
+		result.Rows = append(result.Rows, row)
 		result.Count = len(result.Rows)
 		return true
 	}
 
+	var err error
 	if operation.Index == ClusteredIndex || operation.Index == "" {
-		return collection.walkRange(within, visit)
+		err = collection.walkRange(within, visit)
+	} else {
+		err = collection.Scan(operation.Index, within, func(entry Found) bool {
+			document, found, err := collection.Get(entry.Key)
+			if err != nil || !found {
+				// An index entry with no document behind it is damage, not an
+				// empty row: the two are written together and must stay
+				// together.
+				return false
+			}
+			return visit(entry.Key, document)
+		})
 	}
-
-	return collection.Scan(operation.Index, within, func(entry Found) bool {
-		document, found, err := collection.Get(entry.Key)
-		if err != nil || !found {
-			// An index entry with no document behind it is damage, not an
-			// empty row: the two are written together and must stay together.
-			return false
-		}
-		return visit(entry.Key, document)
-	})
+	if err != nil {
+		return err
+	}
+	return refused
 }
 
 // writes says whether an action changes anything, which decides whether a

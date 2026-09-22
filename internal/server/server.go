@@ -500,7 +500,7 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 				}
 				continue
 			}
-			if err := out.send(protocol.Frame{Type: protocol.Result, ID: frame.ID}, body); err != nil {
+			if err := answer(out, frame.ID, body); err != nil {
 				return err
 			}
 
@@ -512,7 +512,7 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 				}
 				continue
 			}
-			if err := out.send(protocol.Frame{Type: protocol.Result, ID: frame.ID}, body); err != nil {
+			if err := answer(out, frame.ID, body); err != nil {
 				return err
 			}
 
@@ -524,7 +524,7 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 				}
 				continue
 			}
-			if err := out.send(protocol.Frame{Type: protocol.Result, ID: frame.ID}, body); err != nil {
+			if err := answer(out, frame.ID, body); err != nil {
 				return err
 			}
 
@@ -536,7 +536,7 @@ func (s *Server) Handle(conn io.ReadWriter) error {
 				}
 				continue
 			}
-			if err := out.send(protocol.Frame{Type: protocol.Result, ID: frame.ID}, result); err != nil {
+			if err := answer(out, frame.ID, result); err != nil {
 				return err
 			}
 
@@ -1159,6 +1159,14 @@ func (s *Server) openFile(path, account, name string) (*database, error) {
 	}
 	opened.Keep(folder, options.Key)
 
+	// How much answer one call may build, chosen here because here is where
+	// the store is still nobody else's (ISS-37). The frame cap is the number
+	// for the reason the ticket gives: it is what an answer has to fit into,
+	// so it is the only number a budget could be without being invented. It
+	// was already enforced — in protocol.Encode, on the finished bytes, which
+	// is a guard in front of the wall that stops nobody reaching the wall.
+	opened.Budget(protocol.MaxPayload)
+
 	// Said once, when the file is opened, because that is when it is known and
 	// because saying it on every call would train people to stop reading it.
 	s.sayHowItWasLeft(account, name, pages)
@@ -1209,6 +1217,42 @@ func (s *Server) Grant(account, name string, scopes []string, expires time.Time,
 		Expires:   expires,
 		Serial:    serial,
 	}, s.options.Secret)
+}
+
+// answer sends a result, or the refusal that says it did not fit.
+//
+// This is ISS-38's half, and it is deliberately the smaller half. The real
+// work is the budget in internal/store, which refuses while the rows are
+// being accumulated so that an answer that cannot be sent is never built;
+// what is left here is a sliver, because the budget counts the rows and an
+// answer carries a few dozen bytes of envelope around them as well. An answer
+// reaching this check is therefore at most that sliver over the cap, and
+// never the forty-five thousand rows the ticket measured.
+//
+// It is still a length check on bytes that already exist, which is exactly
+// what ISS-37 says is not a limit — and saying so here is better than leaving
+// somebody to find it and think the budget lives in this function. It is a
+// backstop over a constant, not a bound on the work.
+//
+// Before this, protocol.Encode refused the frame, write() passed the error
+// up, and Handle returned it — closing the connection. Closing a connection
+// is the one signal that carries no information: the benchmark rig could only
+// tell a refusal from a dead server by redialling.
+//
+// Events are not sent through here, and that is on purpose. A subscription
+// sends one frame per change and cannot batch its way over the cap; the only
+// way it reaches it is a single change too large to carry, and for a
+// replication stream the right answer to that is still the connection ending.
+// A follower told "that one did not fit" and then handed the change after it
+// would have a hole in its log that nothing downstream could see. See
+// subscribe.go.
+func answer(out *sender, id uint32, body []byte) error {
+	if len(body) > protocol.MaxPayload {
+		return out.send(protocol.Frame{Type: protocol.Failure, ID: id}, failure(fmt.Errorf(
+			"%w: the answer came to %d bytes and one reply may carry %d",
+			store.ErrTooLarge, len(body), protocol.MaxPayload)))
+	}
+	return out.send(protocol.Frame{Type: protocol.Result, ID: id}, body)
 }
 
 func write(conn io.Writer, frame protocol.Frame, payload []byte) error {
@@ -1313,6 +1357,23 @@ func codeFor(err error) string {
 		// "argument".
 		{store.ErrDigest, "digest"},
 		{store.ErrCeiling, "ceiling"},
+
+		// ISS-38, and the reason it was worth doing with ISS-37 rather than
+		// after it. "Your answer does not fit" and "the server died" used to
+		// arrive at a client as the same thing — a bare EOF — because the one
+		// channel for telling a client anything is a frame, and the failure
+		// being reported was that a frame could not be made. Once the budget
+		// refuses while the rows are still being accumulated there is a small
+		// payload to put this in, and a client can tell a refusal from a
+		// socket that broke without redialling to find out.
+		//
+		// Not "ceiling", although the two are neighbours. A ceiling is the
+		// declaration's own row limit and its reader decides whether to pay
+		// for a longer walk; this is the server's budget, which no
+		// declaration can raise, and its reader has to page the range
+		// instead. Not "argument" either: nothing about the arguments is
+		// wrong, and on a smaller collection the identical call answers.
+		{store.ErrTooLarge, "too_large"},
 
 		// The bundle refusals (SAPE-10). Nothing in this server hands a
 		// bundle to anything yet — verification is offline, in front of a

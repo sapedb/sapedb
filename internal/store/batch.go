@@ -36,7 +36,7 @@ import (
 // be remembered is a rule that will be forgotten, so it is checked instead.
 
 // runBatch does every step, or none of them.
-func (s *Store) runBatch(by Attribution, operation Operation, values map[string]any, result *Result) error {
+func (s *Store) runBatch(by Attribution, operation Operation, values map[string]any, result *Result, room *budget) error {
 	if s.pages.Pending() {
 		return fmt.Errorf("%w: commit or roll back what is already written before running %q",
 			ErrUncommitted, operation.Name)
@@ -85,7 +85,7 @@ func (s *Store) runBatch(by Attribution, operation Operation, values map[string]
 		panic(r)
 	}()
 
-	if err := s.runSteps(by, operation, values, result); err != nil {
+	if err := s.runSteps(by, operation, values, result, room); err != nil {
 		// The whole transaction goes, not the step. A batch that left its
 		// first two writes behind would be the thing it exists to prevent.
 		if abandoned := s.Rollback(); abandoned != nil {
@@ -113,7 +113,7 @@ func (s *Store) runBatch(by Attribution, operation Operation, values map[string]
 // one and false of a called one by construction: the steps before it have
 // written, so there is pending work, and that is exactly what was meant to
 // happen.
-func (s *Store) runSteps(by Attribution, operation Operation, values map[string]any, result *Result) error {
+func (s *Store) runSteps(by Attribution, operation Operation, values map[string]any, result *Result, room *budget) error {
 	// What each named step produced, for the steps that come after it.
 	produced := map[string]any{}
 
@@ -125,7 +125,7 @@ func (s *Store) runSteps(by Attribution, operation Operation, values map[string]
 			where = fmt.Sprintf("step %q", step.Name)
 		}
 
-		key, err := s.runStep(by, step, values, produced, result)
+		key, err := s.runStep(by, step, values, produced, result, room)
 		if err != nil {
 			return fmt.Errorf("%s: %w", where, err)
 		}
@@ -148,14 +148,14 @@ func (s *Store) runSteps(by Attribution, operation Operation, values map[string]
 // and it is written here rather than discovered: a composed read is for
 // answers whose shapes are told apart by what is in them — a page and its
 // total — and not for ones that need a label to be read at all.
-func (s *Store) runCalled(by Attribution, callee Operation, values map[string]any, into *Result) (any, error) {
+func (s *Store) runCalled(by Attribution, callee Operation, values map[string]any, into *Result, room *budget) (any, error) {
 	sub := Result{Operation: callee.Name, Version: callee.Version}
 
 	var err error
 	if callee.Action == ActionBatch {
-		err = s.runSteps(by, callee, values, &sub)
+		err = s.runSteps(by, callee, values, &sub, room)
 	} else {
-		err = s.runInline(by, callee, values, &sub)
+		err = s.runInline(by, callee, values, &sub, room)
 	}
 	if err != nil {
 		return nil, err
@@ -174,10 +174,10 @@ func (s *Store) runCalled(by Attribution, callee Operation, values map[string]an
 
 // runStep does one step, after checking what it requires.
 func (s *Store) runStep(by Attribution, step *Step, values map[string]any,
-	produced map[string]any, result *Result) (any, error) {
+	produced map[string]any, result *Result, room *budget) (any, error) {
 
 	if step.Operation != "" {
-		return s.runComposedStep(by, step, values, produced, result)
+		return s.runComposedStep(by, step, values, produced, result, room)
 	}
 
 	collection, err := s.Collection(step.Collection)
@@ -223,7 +223,16 @@ func (s *Store) runStep(by Attribution, step *Step, values map[string]any,
 	switch step.Action {
 	case ActionGet:
 		if found {
-			result.Rows = append(result.Rows, project(document, nil))
+			// Charged against the call's budget like every other row. A
+			// batch's get steps are bounded by how many steps the
+			// declaration wrote down, so this is not where an answer runs
+			// away — but the rows of every step land in one flat list, and
+			// what the budget is a budget for is that list.
+			row := project(document, nil)
+			if err := room.spend(by.Operation, row); err != nil {
+				return nil, err
+			}
+			result.Rows = append(result.Rows, row)
 			result.Count = len(result.Rows)
 		}
 		return key, nil
@@ -291,7 +300,7 @@ func (s *Store) runStep(by Attribution, step *Step, values map[string]any,
 // is the call somebody made, and the steps it turned into are the declaration
 // of that call rather than separate events.
 func (s *Store) runComposedStep(by Attribution, step *Step, values map[string]any,
-	produced map[string]any, result *Result) (any, error) {
+	produced map[string]any, result *Result, room *budget) (any, error) {
 
 	callee, found, err := s.Operation(step.Operation, step.Version)
 	if err != nil {
@@ -327,7 +336,7 @@ func (s *Store) runComposedStep(by Attribution, step *Step, values map[string]an
 		return nil, err
 	}
 
-	return s.runCalled(by, callee, inner, result)
+	return s.runCalled(by, callee, inner, result, room)
 }
 
 // satisfies checks what a step requires of the document it names.

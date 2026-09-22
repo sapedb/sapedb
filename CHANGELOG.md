@@ -860,6 +860,87 @@ recorded, so its absence is not a claim that nothing changed before it.
   down itself (a get, a write, a plain batch of them). The envelope's `Limit`
   is never absent, for any action.
 
+### Fixed
+
+- **A read is now refused while its rows are being accumulated rather than
+  after they all exist, and the refusal carries a code (ISS-37, ISS-38).**
+  `protocol.MaxPayload` is sixteen megabytes and it was enforced — but it was
+  enforced in `protocol.Encode`, on `len()` of a byte slice that already
+  existed. For it to refuse, the server had first to read every row out of the
+  tree and marshal all of them. The cap reported on work already done; it did
+  not bound it. Measured on a 512 MiB container with swap disabled: steady
+  state for inserts, scans and deletes never left 16–20 MiB, and one read —
+  an operation declared once with a limit far above what the collection later
+  held — took the process to 352 MiB and it was OOM-killed.
+
+  `internal/store` now holds a byte budget, spent one row at a time as rows
+  are accumulated, and `Store.Budget` is where the number comes from. The
+  server sets it to the frame cap when it opens a file, because that is the
+  size an answer actually has to fit into and is the only number a budget
+  could be without being invented. A Go caller embedding the store gets no
+  budget at all by default: there is no frame for its answer to fit into, and
+  borrowing a wire limit for a caller that is not on a wire would refuse reads
+  that work today.
+
+  **The same reads are refused, and the same reads answer.** What changed is
+  when and how, not what. The budget counts what `encoding/json` writes for
+  the rows array, so its arithmetic is the answer's own and not an estimate —
+  `TestTheBudgetCountsExactlyWhatTheAnswerWillCarry` compares the two byte for
+  byte, and `TestAReadIsRefusedAtTheByteTheBudgetRunsOut` sets the budget to
+  exactly what a known number of rows costs and measures the row on either
+  side of it.
+
+  **What it cost, measured rather than claimed.** Against a fifty megabyte
+  answer, the heap grew 261 MiB with no budget and 27 MiB under the sixteen
+  megabyte one — the unbudgeted number is the control, because without it the
+  assertion is satisfied by a fixture too small to have been a problem
+  (`TestTheMemoryARefusedReadUsesDoesNotReachTheAnswerItRefuses`).
+
+  **`too_large` is a new refusal code.** Before this, "your answer does not
+  fit" and "the server died" arrived at a client as the same thing — a bare
+  `EOF` — because the one channel for telling a client anything is a frame and
+  the failure being reported was that a frame could not be made. The benchmark
+  rig could only tell them apart by redialling. `store.ErrTooLarge` has its
+  own row in `codeFor`, deliberately not folded into `ceiling` (which is the
+  declaration's own row limit, and tells its reader to decide whether to pay
+  for a longer walk — no limit a caller declares raises the server's budget)
+  or `argument` (nothing about the arguments is wrong; the identical call on a
+  smaller collection answers). The refusal **names no smaller limit**: the
+  declaration stays the only place a limit is chosen, which is the second of
+  the two candidates ISS-38 puts up and the one that does not make the server
+  a participant in pagination. `internal/wire`'s
+  `TestAnAnswerThatDoesNotFitReachesThisClientAsACodeAndNotAsAnEOF` reads the
+  code back over a real socket and then runs another call on the same
+  connection, which is the whole point: a client no longer has to redial to
+  find out whether the server is still there.
+
+  **The budget covers every read that builds rows**, not only the scan ISS-37
+  measured: a get (there is no maximum size for a stored value), a rollup
+  read, a batch's get steps, and a composed batch — which spends one budget
+  between its steps rather than one each, for the same reason `hashRange`
+  keeps one row counter for a walk that crosses several partition files. The
+  operator shell inherits it too, and that is worth saying out loud because
+  ISS-37 reads `Explore`'s `MostRows` cap as the ad-hoc path being the one
+  that cannot hurt the server: `MostRows` is a count of **rows**, which is
+  about two megabytes at the row sizes the ticket measured and about a
+  gigabyte at a megabyte a row.
+
+  **Not streaming, on purpose.** ISS-37 says whether a read should stream is a
+  larger decision and not a prerequisite, and the budget is worth having
+  either way. Nothing here changes what a read is.
+
+  **Known limitation, not fixed here:** the budget counts the rows and an
+  answer also carries a few dozen bytes of envelope around them, so a reply
+  can still arrive at the send path marginally over the cap. That case is
+  caught by `answer()` in `internal/server`, which is the same late length
+  check this replaces — kept deliberately, as a backstop over a constant
+  rather than a bound on the work, and it now sends the refusal as a frame
+  carrying `too_large` instead of closing the socket. A subscription's events
+  are deliberately **not** sent through it: a follower told "that one did not
+  fit" and then handed the change after it would have a hole in its log that
+  nothing downstream could see, so a single change too large to carry still
+  ends the connection.
+
 ### Breaking
 
 - **A grant now expires, and the signed message changed shape to say so

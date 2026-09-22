@@ -134,6 +134,22 @@ var (
 	// a hashRange stops and refuses rather than hand back the digest of a
 	// prefix, which is indistinguishable from the digest of the whole range.
 	ErrCeiling = errors.New("sapedb/store: the walk reached the row limit this operation declares")
+
+	// ErrTooLarge is a read whose answer would be larger than one reply may
+	// carry, refused while the rows are being accumulated rather than once
+	// they all exist. See budget.go and ISS-37.
+	//
+	// It is easy to read as ErrCeiling and it is not that one. A ceiling is
+	// the row limit the OPERATION declared, and reaching it means the
+	// declaration's own promise about cost was kept to the letter. This is
+	// the server's own budget, which no declaration knows anything about: an
+	// operation declaring a million rows is perfectly legal and this is the
+	// sentence that says the server will not hold a million rows in memory in
+	// order to find out it cannot send them. The two also tell their reader
+	// different things to do — a ceiling says decide whether you want to pay
+	// for a longer walk, this says the answer you asked for has no shape that
+	// fits in one reply, so page it.
+	ErrTooLarge = errors.New("sapedb/store: this answer is larger than one reply may carry")
 )
 
 // Operation is a declaration: everything about a call except its arguments.
